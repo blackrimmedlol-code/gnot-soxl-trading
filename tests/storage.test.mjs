@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {defaultState} from '../dist/core.js';
+import {loadStorage,saveStorage,localBackups,recoverStorage,STORAGE_KEY,DataConflict} from '../dist/storage.js';
+class MemoryStorage {map=new Map();fail=false;getItem(k){return this.map.get(k)??null;}setItem(k,v){if(this.fail)throw Error('QuotaExceededError');this.map.set(k,String(v));}}
+test('首次保存、刷新读取与正式修改的五版滚动备份',async()=>{const storage=new MemoryStorage();assert.equal(loadStorage(storage).state.rounds.length,0);let state=await saveStorage(defaultState(),0,{storage});assert.equal(state.revision,1);for(let i=0;i<8;i++){state.draft.reason='修改'+i;state=await saveStorage(state,state.revision,{storage});}assert.equal(loadStorage(storage).state.draft.reason,'修改7');assert.equal(localBackups(storage).length,5);assert.equal(state.revision,9);});
+test('计算器草稿保存不挤掉日志备份',async()=>{const storage=new MemoryStorage();let state=await saveStorage(defaultState(),0,{storage});state=await saveStorage(state,state.revision,{storage,backup:false});assert.equal(localBackups(storage).length,0);});
+test('另一标签页的较新版本不能被旧状态覆盖',async()=>{const storage=new MemoryStorage();const a=await saveStorage(defaultState(),0,{storage});const newer=await saveStorage(a,a.revision,{storage});await assert.rejects(saveStorage(a,a.revision,{storage}),DataConflict);assert.equal(loadStorage(storage).state.revision,newer.revision);});
+test('损坏数据保留原文，不默默清空',()=>{const storage=new MemoryStorage();storage.setItem(STORAGE_KEY,'{broken');const read=loadStorage(storage);assert.equal(read.state,null);assert.ok(read.error);assert.equal(storage.getItem(STORAGE_KEY),'{broken');});
+test('明确恢复损坏的数据时保留原始版本',async()=>{const storage=new MemoryStorage();storage.setItem(STORAGE_KEY,'{broken');const value=await recoverStorage(defaultState(),'{broken',{storage});assert.equal(value.revision,1);assert.equal(localBackups(storage)[0].raw,'{broken');});
+test('配额写入失败保留旧数据',async()=>{const storage=new MemoryStorage();const value=await saveStorage(defaultState(),0,{storage});const original=storage.getItem(STORAGE_KEY);storage.fail=true;await assert.rejects(saveStorage(value,value.revision,{storage}));assert.equal(storage.getItem(STORAGE_KEY),original);});
+test('恢复过程中数据被另一标签页改动时中止',async()=>{const storage=new MemoryStorage();await saveStorage(defaultState(),0,{storage});await assert.rejects(recoverStorage(defaultState(),null,{storage}),DataConflict);});
