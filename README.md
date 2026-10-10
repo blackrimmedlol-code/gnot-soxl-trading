@@ -1,6 +1,6 @@
 # GNOT · SOXL Trading System V1.0
 
-SOXL 独立交易执行与复盘网站。采用独立公开 GitHub 仓库与 GitHub Pages；发布目录为 `dist/`。原投资台账只作跳转，不修改、不共享或覆盖其数据。
+SOXL 独立交易执行与复盘网站。采用独立公开 GitHub 仓库与 GitHub Pages；源文件位于 `dist/`，发布时生成 `.pages/`。原投资台账只作跳转，不修改、不共享或覆盖其数据。
 
 公开页面：[GNOT SOXL 工作台](https://blackrimmedlol-code.github.io/gnot-soxl-trading/#workspace)
 
@@ -58,7 +58,7 @@ python3 -m http.server 8000 --directory dist
 
 ## GitHub Pages 迁移
 
-仓库使用 `.github/workflows/pages.yml`：推送 `main` 后自动检查、测试，全部通过后再发布 `dist/`。Pages Source 设为 GitHub Actions。部署不需要在前端放任何 Token。
+仓库使用 `.github/workflows/pages.yml`：推送 `main` 后自动检查、测试，再运行 `npm run build:pages` 生成并发布 `.pages/`。打包时为样式、图标、脚本及模块引用添加由资源内容生成的版本号，避免更新后仍沿用旧样式缓存；开发源文件保持普通相对路径。Pages Source 设为 GitHub Actions。部署不需要在前端放任何 Token。
 
 独立仓库名称为 `gnot-soxl-trading`。应用无第三方运行时依赖，静态资源使用相对路径。公开的是网站源码和默认规则；用户浏览器中的交易数据不会被推送到仓库。
 

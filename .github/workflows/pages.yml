@@ -20,10 +20,11 @@ jobs:
           node-version: '24'
       - run: npm run check
       - run: npm test
+      - run: npm run build:pages
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: dist
+          path: .pages
   deploy:
     needs: validate
     runs-on: ubuntu-latest

@@ -3,3 +3,4 @@ test-results/
 *.tar.gz
 *.zip
 .DS_Store
+.pages/
