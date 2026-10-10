@@ -54,12 +54,12 @@
                   <label id="target-r-field">目标 R<input name="targetR" type="number" min="0.1" max="20" step="0.1" inputmode="decimal"></label>
                   <label id="target-price-field" hidden>目标价格<input name="targetPrice" type="number" min="0.01" step="0.01" inputmode="decimal"></label>
                 </div>
-                <p class="field-note">整股投入不超计划金额。按价格计算风险与盈亏，未扣手续费；输入不代表实时行情。</p>
+                <p class="field-note">整股投入不超计划金额。按价格计算风险与盈亏；输入不代表实时行情。</p>
               </form>
               <div id="calc-results" aria-live="polite" aria-atomic="true"></div>
             </div>
             <div class="scenario-section"><div class="scenario-heading"><span>价格情景推演</span><strong id="scenario-pct-label">+5.0%</strong></div><input id="scenario-slider" aria-label="模拟买入后的价格涨跌" type="range" min="-25" max="25" step="0.5"><div id="scenario-result"></div><div class="range-labels"><span>−25%</span><span>0%</span><span>+25%</span></div></div>
-            <details class="risk-details"><summary>止损执行与计算口径</summary><p>价格 R = 买入价 − 技术止损价；1.5R／2R 价格按此距离推导。新计划不录入手续费或滑点，计划风险与盈亏均按价格计算。实际 R = 成交盈亏 ÷ 冻结的初始计划风险。目标触价不等于实际成交。</p><p>普通止损触发后通常转为市价单，不能保证止损价成交。跳空、滑点及未计费用会使真实损失超过计划预算。盘前盘后是否生效、触发条件与可用订单类型需向券商核实；止损限价单也可能无法成交。</p><p>SOXL 追求基准指数每日 3 倍收益，不保证多日累计收益为 3 倍。<a href="https://www.direxion.com/product/daily-semiconductor-bull-bear-3x-etfs" target="_blank" rel="noopener noreferrer">产品说明 ↗</a> · <a href="https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-14" target="_blank" rel="noopener noreferrer">订单说明 ↗</a></p></details>
+            <details class="risk-details"><summary>止损执行与计算口径</summary><p>价格 R = 买入价 − 技术止损价；1.5R／2R 价格按此距离推导。计划风险按入场价与技术止损价的距离计算。实际 R = 成交盈亏 ÷ 冻结的初始计划风险。目标触价不等于实际成交。</p><p>普通止损触发后通常转为市价单，不能保证止损价成交。跳空和滑点会使真实损失超过计划预算。盘前盘后是否生效、触发条件与可用订单类型需向券商核实；止损限价单也可能无法成交。</p><p>SOXL 追求基准指数每日 3 倍收益，不保证多日累计收益为 3 倍。<a href="https://www.direxion.com/product/daily-semiconductor-bull-bear-3x-etfs" target="_blank" rel="noopener noreferrer">产品说明 ↗</a> · <a href="https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-14" target="_blank" rel="noopener noreferrer">订单说明 ↗</a></p></details>
           </section>
           <section class="panel checklist-panel" aria-labelledby="check-title">
             <div class="section-title"><div><span class="micro">02 / PRE-TRADE CHECK</span><h2 id="check-title">入场前，逐项确认。</h2></div><span id="check-progress" class="count-tag">0 / 9</span></div>
@@ -76,11 +76,11 @@
       </section>
       <section id="page-playbook" class="page" hidden aria-labelledby="playbook-title">
         <div class="page-heading"><div><p class="eyebrow">THE RULES / V1.0</p><h1 id="playbook-title">交易手册</h1><p class="subtitle">先确定失效条件，再决定是否参与。</p></div><span class="tag">初始策略假设 · 未经回测验证</span></div>
-        <div class="playbook-intro"><strong>只主动交易 SOXL。</strong><p>初始权益 $25,000；首笔原则上 $5,000；单轮计划风险 ≤ 当前账户权益 1%；初始目标 1.5R～2R。风险不合规时默认放弃，不缩短技术止损、不扩预算。盈亏按成交价格计算，未扣手续费。</p></div>
+        <div class="playbook-intro"><strong>只主动交易 SOXL。</strong><p>初始权益 $25,000；首笔原则上 $5,000；单轮计划风险 ≤ 当前账户权益 1%；初始目标 1.5R～2R。风险不合规时默认放弃，不缩短技术止损、不扩预算。盈亏按成交价格计算。</p></div>
         <div class="playbook-grid">
           <article class="rule-card"><span class="rule-index">01</span><h2>市场环境判断</h2><ul><li>先观察 QQQ 与 SOXX 日线。</li><li>SOXX 不应持续破位下跌。</li><li>Risk-on 允许观察入场；Neutral 谨慎或降低频率。</li><li>Risk-off 原则上不开新的左侧多头仓位。</li></ul></article>
           <article class="rule-card"><span class="rule-index">02</span><h2>入场条件</h2><ul><li>SOXL 接近经过识别的大级别支撑。</li><li>30 分钟判断支撑、强弱和趋势结构；15 分钟确认止跌或入场信号。</li><li>买入前写明理由、技术止损和退出规则。</li><li>风险预算合规，目标空间至少 1.5R。</li></ul></article>
-          <article class="rule-card"><span class="rule-index">03</span><h2>单轮风险控制</h2><ul><li>整股数 = 向下取整（计划金额 ÷ 买入价）。</li><li>计划亏损 = 股数 ×（买入价 − 技术止损）。</li><li>上限为账户权益 1%，初始 $250；手续费不单独记录。</li><li>$5,000 仓位超预算时默认放弃。金额可手动调整，但系统不会代你调整。</li></ul></article>
+          <article class="rule-card"><span class="rule-index">03</span><h2>单轮风险控制</h2><ul><li>整股数 = 向下取整（计划金额 ÷ 买入价）。</li><li>计划亏损 = 股数 ×（买入价 − 技术止损）。</li><li>上限为账户权益 1%，初始 $250。</li><li>$5,000 仓位超预算时默认放弃。金额可手动调整，但系统不会代你调整。</li></ul></article>
           <article class="rule-card"><span class="rule-index">04</span><h2>止损设置</h2><ul><li>按支撑失效设置，不强制固定跌幅。</li><li>不为买入人为缩短技术止损距离。</li><li>剩余仓位始终有退出规则，结构跟踪止损不得下移。</li><li>普通止损不保证成交价；跳空、滑点和盘前盘后有效性需核实。</li></ul></article>
           <article class="rule-card"><span class="rule-index">05</span><h2>1.5R／2R 止盈</h2><ul><li>初始目标 1.5R～2R，以技术空间为约束。</li><li>优先测试到达 2R 时卖出 50%，整股向下取整，剩余结构跟踪。</li><li>部分止盈只计算实际卖出股数的成交盈亏；不把目标价当成交价。</li><li>整轮实际 R = 所有实际成交盈亏 ÷ 冻结的初始计划风险。</li></ul></article>
           <article class="rule-card"><span class="rule-index">06</span><h2>右侧加仓</h2><ul><li>仅在原有仓位盈利、趋势重新确认时考虑。</li><li>取消下跌递增加仓；不设斐波那契或自动补仓网格。</li><li>加仓后重算整轮风险，不能用已锁定利润掩盖剩余仓位风险。</li><li>风险预算不足就放弃；不强制加仓、不强制满仓。</li></ul></article>
@@ -95,7 +95,7 @@
         <div id="journal-list"></div>
       </section>
       <section id="page-performance" class="page" hidden aria-labelledby="performance-title">
-        <div class="page-heading"><div><p class="eyebrow">MEASURE WHAT HAPPENED</p><h1 id="performance-title">表现与复盘</h1><p class="subtitle">主动 SOXL 交易单独统计。按实际成交计算盈亏，未扣手续费。</p></div><button id="snapshot-button" class="primary-button">＋ 账户权益快照</button></div>
+        <div class="page-heading"><div><p class="eyebrow">MEASURE WHAT HAPPENED</p><h1 id="performance-title">表现与复盘</h1><p class="subtitle">主动 SOXL 交易单独统计。按实际成交计算盈亏。</p></div><button id="snapshot-button" class="primary-button">＋ 账户权益快照</button></div>
         <div id="sample-warning"></div><div id="performance-stats" class="performance-grid"></div>
         <section class="panel"><div class="section-title"><div><span class="micro">ACCOUNT EQUITY</span><h2>账户权益曲线</h2></div><span class="tag">手动快照 · 出入金调整</span></div><div id="equity-chart"></div><p class="field-note">曲线采用份额净值法剔除出入金；最大回撤仅基于已录入快照，无法捕获未记录的盘中低点。SOXL 已实现收益与完整账户权益分别统计。</p></section>
         <section class="panel section-spacing"><div class="section-title"><h2>权益快照与回撤复核</h2><button id="drawdown-review-button" class="quiet-button">记录 5% 回撤复核</button></div><div id="snapshot-list"></div><div id="drawdown-review-list"></div></section>
