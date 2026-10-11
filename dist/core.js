@@ -1,6 +1,11 @@
 // Pure, dependency-free financial functions. No market data or order routing.
 export const SCHEMA_VERSION = 1;
 export const RULES = Object.freeze({riskPct: .01, initialEquity: 25000, initialAmount: 5000, minNetRR: 1.5, pauseDD: .05, haltDD: .10});
+export const SYMBOLS = Object.freeze({
+  SOXL: {name:'半导体', leverage:'3× DAILY', reference:'QQQ／SOXX', url:'https://www.direxion.com/product/daily-semiconductor-bull-bear-3x-etfs', note:'半导体每日三倍。SOXX 为观察参考，实际基准以发行方为准。'},
+  AGQ: {name:'白银', leverage:'2× DAILY', reference:'白银期货／SLV', url:'https://www.proshares.com/our-etfs/leveraged-and-inverse/agq', note:'白银期货指数每日两倍。SLV 仅作观察参考；期货展期、隔夜行情与现货可能产生差异。'},
+  LABU: {name:'生物科技', leverage:'3× DAILY', reference:'XBI', url:'https://www.direxion.com/product/daily-sp-biotech-bull-bear-3x-etfs', note:'生物科技指数每日三倍。用 XBI 观察板块，评估研发、审批、融资与隔夜风险。'}
+});
 export const CHECKS = [
   ['market', 'QQQ／SOXX 日线环境支持此次交易'],
   ['soxx', 'SOXX 已止跌，没有持续破位下跌'],
@@ -12,13 +17,31 @@ export const CHECKS = [
   ['event', 'CPI／FOMC／龙头财报与隔夜风险已评估'],
   ['emotion', '已排除恐惧、报复交易与 FOMO 的影响']
 ];
+export function checksFor(symbol='SOXL') {
+  const overrides={
+    SOXL:{risk:'本轮与已有持仓合计计划风险不超过账户 1%'},
+    AGQ:{market:'白银期货／SLV 日线环境支持此次交易',soxx:'白银走势已止跌，没有持续破位下跌',support:'已识别 AGQ 大级别支撑',event:'美元／利率、白银隔夜行情与事件风险已评估',risk:'本轮与已有持仓合计计划风险不超过账户 1%'},
+    LABU:{market:'XBI 日线环境与生物科技板块支持此次交易',soxx:'XBI 已止跌，没有持续破位下跌',support:'已识别 LABU 大级别支撑',event:'利率／融资、研发审批与隔夜风险已评估',risk:'本轮与已有持仓合计计划风险不超过账户 1%'}
+  };
+  return CHECKS.map(([key,text])=>[key,overrides[symbol]?.[key]??text]);
+}
+export function selectDraft(state,symbol) {
+  if(!Object.hasOwn(SYMBOLS,symbol)) throw Error('只支持 SOXL、AGQ、LABU。');
+  const next=structuredClone(state),previous=next.draft.symbol??'SOXL';
+  next.symbolDrafts??={};next.symbolDrafts[previous]=structuredClone(next.draft);
+  next.draft=structuredClone(next.symbolDrafts[symbol]??defaultState().draft);
+  next.draft.symbol=symbol;
+  // Account equity is shared; prices, checks and reasons belong to each symbol.
+  next.draft.plan.equity=state.draft.plan.equity;
+  return next;
+}
 const EPS = 1e-8;
 const n = v => (v === '' || v === null || v === undefined) ? NaN : Number(v);
 const finite = v => Number.isFinite(v);
 const positive = v => finite(v) && v > 0;
 export const uid = () => globalThis.crypto?.randomUUID?.() ?? `gnot-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export function defaultState() {
-  return {schemaVersion:1, revision:0, settings:{initialEquity:25000, startDate:'2026-11-01'}, rounds:[], snapshots:[], drawdownReviews:[], draft:{plan:{equity:25000, amount:5000, entry:'', stop:'', targetMode:'r', targetR:2, targetPrice:'', costs:0, gapPct:0, scenarioPct:5}, environment:'neutral', strategy:'support', checks:{}, reason:'', events:''}, meta:{updatedAt:null, lastExport:null}};
+  return {schemaVersion:1, revision:0, settings:{initialEquity:25000, startDate:'2026-11-01'}, rounds:[], snapshots:[], drawdownReviews:[], draft:{symbol:'SOXL',plan:{equity:25000, amount:5000, entry:'', stop:'', targetMode:'r', targetR:2, targetPrice:'', costs:0, gapPct:0, scenarioPct:5}, environment:'neutral', strategy:'support', checks:{}, reason:'', events:''}, meta:{updatedAt:null, lastExport:null}};
 }
 export function calculatePlan(input) {
   const equity=n(input.equity), amount=n(input.amount), entry=n(input.entry), stop=n(input.stop), costs=n(input.costs), gapPct=n(input.gapPct), targetR=n(input.targetR);
@@ -89,6 +112,25 @@ export function positionRisk(round, options={}) {
   const roundNetAtStop=a.realized+a.qty*stop-a.basis-exitFee;
   return {valid:true,stop,remainingRisk,roundLoss:Math.max(0,-roundNetAtStop),roundNetAtStop,risk:Math.max(remainingRisk,-roundNetAtStop,0)};
 }
+export function portfolioRisk(state,{excludeId=null,asOf=null}={}) {
+  let risk=0;const positions=[],unknown=[];
+  for(const original of state.rounds.filter(r=>r.scope==='active'&&r.id!==excludeId)) {
+    const r=asOf?{...original,fills:original.fills.filter(f=>Date.parse(f.at)<=Date.parse(asOf))}:original;
+    if(!accounting(r).qty)continue;
+    const p=positionRisk(r,{stop:effectiveStop(r,asOf)});
+    if(!p.valid){unknown.push(r.symbol);continue;}
+    risk+=p.risk;positions.push({id:r.id,symbol:r.symbol,risk:p.risk});
+  }
+  return {valid:!unknown.length,risk,positions,unknown};
+}
+export function calculateDraft(state) {
+  const c=calculatePlan(state.draft.plan),portfolio=portfolioRisk(state);
+  if(!c.valid)return {...c,portfolio};
+  const violations=[...c.violations];
+  if(!portfolio.valid)violations.push('已有持仓风险无法计算，请先补齐有效止损。');
+  if(portfolio.risk+c.risk>c.budget+EPS)violations.push('新计划与已有主动持仓合计风险超过账户权益 1%。');
+  return {...c,portfolio,combinedRisk:portfolio.risk+c.risk,availableRisk:Math.max(0,c.budget-portfolio.risk),violations,pass:!violations.length};
+}
 export function previewFill(round, fill, options={}) {
   const before=accounting(round);
   const after=accounting({...round,fills:[...round.fills,fill]});
@@ -108,6 +150,10 @@ export function previewFill(round, fill, options={}) {
     }
     if(rp.risk>budget+EPS) violations.push('成交后整轮风险超过锁定账户权益的 1%。');
     if(options.currentEquity && rp.risk>options.currentEquity*RULES.riskPct+EPS) violations.push('成交后整轮风险超过当前账户权益的 1%。');
+    if(options.portfolio){
+      if(!options.portfolio.valid)violations.push('其他主动持仓风险未知，无法确认账户风险预算。');
+      if(options.portfolio.risk+rp.risk>(options.currentEquity??Number(round.plan.equity))*RULES.riskPct+EPS)violations.push('成交后三标的合计计划风险超过账户权益 1%。');
+    }
     const planned=calculatePlan(round.plan);
     if(!planned.pass) violations.push(...planned.violations,...planned.errors);
     const target=fill.targetPrice??planned.target;
@@ -120,7 +166,7 @@ export function previewFill(round, fill, options={}) {
     if(!round.exitPlan.trim()) violations.push('持仓必须有明确的退出规则。');
     if(round.environment==='risk-off' && round.strategy==='support') violations.push('Risk-off：原则上不开新的左侧支撑反弹多头。');
     if(options.guard?.blocked) violations.push(...options.guard.reasons);
-    if(options.otherOpen) violations.push('已有另一轮 SOXL 持仓，请在同一轮记录成交或先退出。');
+    if(options.otherOpen) violations.push(`已有另一轮 ${round.symbol} 持仓，请在同一轮记录成交或先退出。`);
   }
   return {before,after,risk:rp,budget,violations:[...new Set(violations)],pass:!violations.length};
 }
@@ -138,8 +184,8 @@ export function snapshotSeries(state) {
   }
   return {points,maxDD,currentDD:points.at(-1).drawdown,latest:state.snapshots.length?points.at(-1):null};
 }
-export function statistics(state) {
-  const active=state.rounds.filter(r=>r.scope==='active');
+export function statistics(state,symbol='all') {
+  const active=state.rounds.filter(r=>r.scope==='active'&&(symbol==='all'||r.symbol===symbol));
   const closed=active.map(r=>({round:r,a:accounting(r)})).filter(x=>x.a.closed).sort((x,y)=>Date.parse(x.a.exitAt)-Date.parse(y.a.exitAt));
   const wins=closed.filter(x=>x.a.realized>EPS), losses=closed.filter(x=>x.a.realized<-EPS), flat=closed.length-wins.length-losses.length;
   const rs=closed.filter(x=>positive(x.round.initialRisk));
@@ -191,7 +237,7 @@ export function validateState(input) {
   const ids=new Set(); const unique=id=>{assert(string(id,200)&&id.length>0&&!ids.has(id),'存在缺失或重复的数据 ID。');ids.add(id);};
   for(const r of input.rounds) {
     unique(r.id);assert(['active','history'].includes(r.scope),'交易分类无效。');
-    assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||r.symbol==='SOXL'),'主动交易只能记录 SOXL。');
+    assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易只能记录 SOXL、AGQ、LABU。');
     assert(['risk-on','neutral','risk-off'].includes(r.environment)&&['support','trend'].includes(r.strategy),'市场环境或入场策略无效。');
     assert(obj(r.plan)&&obj(r.checks)&&obj(r.review),'交易计划／检查／复盘信息缺失。');
     const p=calculatePlan(r.plan);
@@ -199,6 +245,7 @@ export function validateState(input) {
     else {assert(r.initialRisk===null&&positive(n(r.plan.entry))&&positive(n(r.plan.amount))&&(r.plan.stop===''||r.plan.stop===null),'历史计划缺少基础金额／价格，或未知初始风险被填为数值。');}
     assert(stamp(r.createdAt)&&string(r.title,300)&&string(r.entryReason)&&string(r.exitPlan)&&string(r.events),'交易轮时间或文本无效。');
     for(const [id] of CHECKS) assert(typeof r.checks[id]==='boolean','检查清单值必须为布尔值。');
+    if(r.checkLabels!==undefined)assert(obj(r.checkLabels)&&CHECKS.every(([id])=>string(r.checkLabels[id],2000)),'冻结清单文本无效。');
     assert(typeof r.review.compliant==='boolean'||r.review.compliant===null,'规则遵守评价无效。');
     assert(string(r.review.notes)&&Number.isInteger(r.review.rating)&&r.review.rating>=0&&r.review.rating<=5,'复盘评价无效。');
     assert(Array.isArray(r.fills)&&r.fills.length<=10000&&Array.isArray(r.stopEvents),'成交／止损记录无效。');
@@ -228,19 +275,29 @@ export function validateState(input) {
   }
   for(const r of input.drawdownReviews){unique(r.id);assert(stamp(r.at)&&string(r.notes)&&r.notes.trim().length>=10,'回撤复核结论至少需要 10 个字符。');}
   snapshotSeries(input);
-  assert(obj(input.draft)&&obj(input.draft.plan)&&obj(input.draft.checks),'计划草稿缺失。');
-  assert(['neutral','risk-on','risk-off'].includes(input.draft.environment)&&['support','trend'].includes(input.draft.strategy),'草稿环境无效。');
-  assert(string(input.draft.reason)&&string(input.draft.events),'草稿文本无效。');
-  const keys=['equity','amount','entry','stop','targetR','targetPrice','costs','gapPct','scenarioPct'];
-  for(const key of keys)assert(input.draft.plan[key]===''||finite(Number(input.draft.plan[key])),'草稿输入含非法数值。');
-  assert(['r','price'].includes(input.draft.plan.targetMode),'目标模式无效。');
+  function validateDraft(d) {
+    assert(obj(d)&&obj(d.plan)&&obj(d.checks),'计划草稿缺失。');
+    assert(d.symbol===undefined||Object.hasOwn(SYMBOLS,d.symbol),'草稿标的无效。');
+    assert(['neutral','risk-on','risk-off'].includes(d.environment)&&['support','trend'].includes(d.strategy),'草稿环境无效。');
+    assert(string(d.reason)&&string(d.events),'草稿文本无效。');
+    for(const key of ['equity','amount','entry','stop','targetR','targetPrice','costs','gapPct','scenarioPct'])assert(d.plan[key]===''||finite(Number(d.plan[key])),'草稿输入含非法数值。');
+    assert(['r','price'].includes(d.plan.targetMode),'目标模式无效。');
+  }
+  validateDraft(input.draft);
+  if(input.symbolDrafts!==undefined){
+    assert(obj(input.symbolDrafts),'分标的草稿无效。');
+    for(const [symbol,d] of Object.entries(input.symbolDrafts)){assert(Object.hasOwn(SYMBOLS,symbol)&&(d.symbol??'SOXL')===symbol,'分标的草稿与标的不一致。');validateDraft(d);}
+  }
   assert(obj(input.meta)&&Number.isInteger(input.revision)&&input.revision>=0,'备份元数据无效。');
   return structuredClone(input);
 }
-export function newRound(state, {scope='active',symbol='SOXL',title=''}={}) {
+export function newRound(state, {scope='active',symbol=state.draft.symbol??'SOXL',title=''}={}) {
   const d=state.draft, c=calculatePlan(d.plan);
+  symbol=symbol.toUpperCase();
+  if(scope==='active'&&!Object.hasOwn(SYMBOLS,symbol))throw Error('只支持 SOXL、AGQ、LABU。');
   if(!c.valid && (scope==='active'||!positive(n(d.plan.entry))||!positive(n(d.plan.amount))||(d.plan.stop!==''&&d.plan.stop!==null))) throw Error(c.errors.join(' '));
-  return {id:uid(),symbol:scope==='active'?'SOXL':symbol.toUpperCase(),scope,title:title||`${scope==='active'?'SOXL':symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan:structuredClone(d.plan),initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS:k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'优先测试 2R 减仓 50%，剩余使用结构跟踪止损；任何剩余仓位都有退出规则。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
+  const combined=scope==='active'?calculateDraft(state):c;
+  return {id:uid(),symbol,scope,title:title||`${symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan:structuredClone(d.plan),initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS&&(scope!=='active'||combined.portfolio.valid&&combined.combinedRisk<=c.budget+EPS):k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),checkLabels:Object.fromEntries(checksFor(symbol)),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'优先测试 2R 减仓 50%，剩余使用结构跟踪止损；任何剩余仓位都有退出规则。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
 }
 export function mergeStates(local, imported) {
   validateState(local);validateState(imported);
@@ -259,6 +316,7 @@ const csvCell=x=>'"'+String(x??'').replaceAll('"','""')+'"';
 export function exportBackupCSV(state) {
   validateState(state);
   const rows=[['record_type','id','payload_json'],['settings','settings',JSON.stringify(state.settings)],['draft','draft',JSON.stringify(state.draft)],['meta','meta',JSON.stringify({schemaVersion:1,revision:state.revision,meta:state.meta})]];
+  if(state.symbolDrafts!==undefined)rows.push(['symbolDrafts','symbolDrafts',JSON.stringify(state.symbolDrafts)]);
   for(const key of ['rounds','snapshots','drawdownReviews']) for(const row of state[key])rows.push([key,row.id,JSON.stringify(row)]);
   return '\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
 }
@@ -281,12 +339,12 @@ export function importBackupCSV(text) {
   const state=defaultState(), singles=new Set();
   for(const row of rows){
     assert(row.length===3,'备份 CSV 列数错误。');const [kind,id,payload]=row;const data=JSON.parse(payload);
-    if(['settings','draft','meta'].includes(kind)){
+    if(['settings','draft','meta','symbolDrafts'].includes(kind)){
       assert(!singles.has(kind),'备份 CSV 重复元数据。');singles.add(kind);
       if(kind==='meta'){assert(data.schemaVersion===1,'不支持的 CSV 版本。');state.revision=data.revision;state.meta=data.meta;}else state[kind]=data;
     }else{assert(['rounds','snapshots','drawdownReviews'].includes(kind)&&data.id===id,'备份 CSV 类型或 ID 错误。');state[kind].push(data);}
   }
-  assert(singles.size===3,'备份 CSV 元数据不完整。');return validateState(state);
+  assert(['settings','draft','meta'].every(key=>singles.has(key)),'备份 CSV 元数据不完整。');return validateState(state);
 }
 export function exportFillsCSV(state) {
   const rows=[['round_id','scope','symbol','time_iso','side','kind','quantity','actual_price_usd','planned_price_usd','fee_usd','realized_net_usd','remaining_qty','remaining_average_cost','initial_risk_usd','reason','violations']];
