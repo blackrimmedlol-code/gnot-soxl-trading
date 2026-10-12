@@ -4,7 +4,8 @@ export const RULES = Object.freeze({riskPct: .01, initialEquity: 25000, initialA
 export const SYMBOLS = Object.freeze({
   SOXL: {name:'半导体', leverage:'3× DAILY', reference:'QQQ／SOXX', url:'https://www.direxion.com/product/daily-semiconductor-bull-bear-3x-etfs', note:'半导体每日三倍。SOXX 为观察参考，实际基准以发行方为准。'},
   AGQ: {name:'白银', leverage:'2× DAILY', reference:'白银期货／SLV', url:'https://www.proshares.com/our-etfs/leveraged-and-inverse/agq', note:'白银期货指数每日两倍。SLV 仅作观察参考；期货展期、隔夜行情与现货可能产生差异。'},
-  LABU: {name:'生物科技', leverage:'3× DAILY', reference:'XBI', url:'https://www.direxion.com/product/daily-sp-biotech-bull-bear-3x-etfs', note:'生物科技指数每日三倍。用 XBI 观察板块，评估研发、审批、融资与隔夜风险。'}
+  LABU: {name:'生物科技', leverage:'3× DAILY', reference:'XBI', url:'https://www.direxion.com/product/daily-sp-biotech-bull-bear-3x-etfs', note:'生物科技指数每日三倍。用 XBI 观察板块，评估研发、审批、融资与隔夜风险。'},
+  MSTU: {name:'MSTR', leverage:'2× DAILY', reference:'MSTR／BTC', url:'https://www.rexshares.com/mstu/', note:'MSTR 单只股票每日两倍，并非比特币指数。MSTR 结构需独立确认，另评估 BTC 全天／周末行情及公司事件。'}
 });
 export const CHECKS = [
   ['market', 'QQQ／SOXX 日线环境支持此次交易'],
@@ -21,12 +22,13 @@ export function checksFor(symbol='SOXL') {
   const overrides={
     SOXL:{risk:'本轮与已有持仓合计计划风险不超过账户 1%'},
     AGQ:{market:'白银期货／SLV 日线环境支持此次交易',soxx:'白银走势已止跌，没有持续破位下跌',support:'已识别 AGQ 大级别支撑',event:'美元／利率、白银隔夜行情与事件风险已评估',risk:'本轮与已有持仓合计计划风险不超过账户 1%'},
-    LABU:{market:'XBI 日线环境与生物科技板块支持此次交易',soxx:'XBI 已止跌，没有持续破位下跌',support:'已识别 LABU 大级别支撑',event:'利率／融资、研发审批与隔夜风险已评估',risk:'本轮与已有持仓合计计划风险不超过账户 1%'}
+    LABU:{market:'XBI 日线环境与生物科技板块支持此次交易',soxx:'XBI 已止跌，没有持续破位下跌',support:'已识别 LABU 大级别支撑',event:'利率／融资、研发审批与隔夜风险已评估',risk:'本轮与已有持仓合计计划风险不超过账户 1%'},
+    MSTU:{market:'MSTR 日线与 BTC 背景支持此次交易',soxx:'MSTR 已止跌，没有持续破位下跌',support:'已识别 MSTU 大级别支撑',event:'MSTR 公司事件／融资、BTC 隔夜与周末风险已评估',risk:'本轮与已有持仓合计计划风险不超过账户 1%'}
   };
   return CHECKS.map(([key,text])=>[key,overrides[symbol]?.[key]??text]);
 }
 export function selectDraft(state,symbol) {
-  if(!Object.hasOwn(SYMBOLS,symbol)) throw Error('只支持 SOXL、AGQ、LABU。');
+  if(!Object.hasOwn(SYMBOLS,symbol)) throw Error('只支持 SOXL、AGQ、LABU、MSTU。');
   const next=structuredClone(state),previous=next.draft.symbol??'SOXL';
   next.symbolDrafts??={};next.symbolDrafts[previous]=structuredClone(next.draft);
   next.draft=structuredClone(next.symbolDrafts[symbol]??defaultState().draft);
@@ -104,6 +106,13 @@ export function effectiveStop(round, asOf=null) {
   const events=[...(round.stopEvents??[])].filter(x=>!asOf || Date.parse(x.at)<=Date.parse(asOf)).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
   return events.at(-1)?.price ?? n(round.plan.stop);
 }
+export function breakevenStop(round) {
+  const a=accounting(round),stop=effectiveStop(round);
+  if(!a.qty||!positive(a.avg))return null;
+  const price=Math.max(a.avg,positive(stop)?stop:0);
+  // Round upward to the entry form's price precision; never lower an existing stop.
+  return {price:Math.ceil(price*10000)/10000,average:a.avg,currentStop:positive(stop)?stop:null,qty:a.qty};
+}
 export function positionRisk(round, options={}) {
   const a=accounting(round), stop=options.stop??effectiveStop(round), exitFee=options.exitFee??Number(round.plan.costs)/2;
   if(!a.qty) return {valid:true,remainingRisk:0,roundLoss:Math.max(0,-a.realized),roundNetAtStop:a.realized,risk:Math.max(0,-a.realized)};
@@ -152,7 +161,7 @@ export function previewFill(round, fill, options={}) {
     if(options.currentEquity && rp.risk>options.currentEquity*RULES.riskPct+EPS) violations.push('成交后整轮风险超过当前账户权益的 1%。');
     if(options.portfolio){
       if(!options.portfolio.valid)violations.push('其他主动持仓风险未知，无法确认账户风险预算。');
-      if(options.portfolio.risk+rp.risk>(options.currentEquity??Number(round.plan.equity))*RULES.riskPct+EPS)violations.push('成交后三标的合计计划风险超过账户权益 1%。');
+      if(options.portfolio.risk+rp.risk>(options.currentEquity??Number(round.plan.equity))*RULES.riskPct+EPS)violations.push('成交后四标的合计计划风险超过账户权益 1%。');
     }
     const planned=calculatePlan(round.plan);
     if(!planned.pass) violations.push(...planned.violations,...planned.errors);
@@ -237,7 +246,7 @@ export function validateState(input) {
   const ids=new Set(); const unique=id=>{assert(string(id,200)&&id.length>0&&!ids.has(id),'存在缺失或重复的数据 ID。');ids.add(id);};
   for(const r of input.rounds) {
     unique(r.id);assert(['active','history'].includes(r.scope),'交易分类无效。');
-    assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易只能记录 SOXL、AGQ、LABU。');
+    assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易只能记录 SOXL、AGQ、LABU、MSTU。');
     assert(['risk-on','neutral','risk-off'].includes(r.environment)&&['support','trend'].includes(r.strategy),'市场环境或入场策略无效。');
     assert(obj(r.plan)&&obj(r.checks)&&obj(r.review),'交易计划／检查／复盘信息缺失。');
     const p=calculatePlan(r.plan);
@@ -294,10 +303,10 @@ export function validateState(input) {
 export function newRound(state, {scope='active',symbol=state.draft.symbol??'SOXL',title=''}={}) {
   const d=state.draft, c=calculatePlan(d.plan);
   symbol=symbol.toUpperCase();
-  if(scope==='active'&&!Object.hasOwn(SYMBOLS,symbol))throw Error('只支持 SOXL、AGQ、LABU。');
+  if(scope==='active'&&!Object.hasOwn(SYMBOLS,symbol))throw Error('只支持 SOXL、AGQ、LABU、MSTU。');
   if(!c.valid && (scope==='active'||!positive(n(d.plan.entry))||!positive(n(d.plan.amount))||(d.plan.stop!==''&&d.plan.stop!==null))) throw Error(c.errors.join(' '));
   const combined=scope==='active'?calculateDraft(state):c;
-  return {id:uid(),symbol,scope,title:title||`${symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan:structuredClone(d.plan),initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS&&(scope!=='active'||combined.portfolio.valid&&combined.combinedRisk<=c.budget+EPS):k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),checkLabels:Object.fromEntries(checksFor(symbol)),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'优先测试 2R 减仓 50%，剩余使用结构跟踪止损；任何剩余仓位都有退出规则。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
+  return {id:uid(),symbol,scope,title:title||`${symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan:structuredClone(d.plan),initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS&&(scope!=='active'||combined.portfolio.valid&&combined.combinedRisk<=c.budget+EPS):k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),checkLabels:Object.fromEntries(checksFor(symbol)),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'默认测试：2R 实际减仓 50%；确认卖出后将剩余止损上移至实际成本均价，已有更高止损不下移；之后按 30 分钟结构继续上移。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
 }
 export function mergeStates(local, imported) {
   validateState(local);validateState(imported);
