@@ -19,4 +19,9 @@ for(const name of ['index.html','app.js','storage.js']){
     (_match,quote,asset)=>`${quote}./${asset}?v=${version}${quote}`);
   await writeFile(file,stamped);
 }
+// The layout harness must load the same build, even when index.html is cached.
+const harness=path.join(output,'qa-layout.html');
+const harnessText=await readFile(harness,'utf8');
+await writeFile(harness,harnessText.replace(/(src|href)="\.\/index\.html(#[^"]*)?"/g,
+  (_match,attribute,hash='')=>`${attribute}="./index.html?v=${version}${hash}"`));
 console.log(`Pages assets: ${version}`);
