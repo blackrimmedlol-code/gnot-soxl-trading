@@ -52,20 +52,20 @@
             <div class="calc-grid">
               <form id="calculator-form" autocomplete="off">
                 <div class="field-grid">
-                  <label>当前账户总权益<input name="equity" type="number" min="1" max="100000000" step="0.01" inputmode="decimal" required></label>
-                  <label>仓位输入方式<select name="sizingMode"><option value="shares">按股数（自动算金额）</option><option value="amount">按金额预算</option></select></label>
-                  <label id="quantity-field">计划股数<input name="quantity" type="number" min="1" step="1" placeholder="输入整股数" inputmode="numeric"></label>
+                  
+                  
+                  <label id="quantity-field">股数<input name="quantity" type="number" min="1" step="1" placeholder="输入整股数" inputmode="numeric"></label>
                   <label id="plan-amount-field"><span id="plan-amount-label">计划金额（自动换算）</span><input name="amount" type="number" min="0.0001" step="any" inputmode="decimal" readonly></label>
-                  <label>计划买入价<input name="entry" type="number" min="0.01" step="0.01" placeholder="输入价格" inputmode="decimal" required></label>
+                  <label>买入价<input name="entry" type="number" min="0.01" step="0.01" placeholder="输入价格" inputmode="decimal" required></label>
                   <label>技术止损价<input name="stop" type="number" min="0.01" step="0.01" placeholder="支撑失效位置" inputmode="decimal" required></label>
                 </div>
-                <div class="range-row" id="amount-range" hidden><label for="amount-slider">计划金额 <span id="amount-slider-label"></span></label><input id="amount-slider" aria-label="调整计划金额" type="range" min="500" max="10000" step="100"></div>
+                <label class="full-field buy-reason">买入理由<textarea id="entry-reason" rows="2" placeholder="一句话：支撑反弹或趋势确认的依据"></textarea></label><button type="button" id="record-buy" class="primary-button full-width">记录这笔买入 →</button><button type="button" id="create-round" class="quiet-button full-width">仅保存为提前计划</button><p class="field-note">已成交填实际价；保存买入时一次建轮并登记成交。</p><details class="compact-details"><summary>账户、目标与金额模式</summary><div class="field-grid"><label>当前账户总权益<input name="equity" type="number" min="1" max="100000000" step="0.01" inputmode="decimal" required></label><label>仓位输入方式<select name="sizingMode"><option value="shares">按股数（自动算金额）</option><option value="amount">按金额预算</option></select></label></div><div class="range-row" id="amount-range" hidden><label for="amount-slider">计划金额 <span id="amount-slider-label"></span></label><input id="amount-slider" aria-label="调整计划金额" type="range" min="500" max="10000" step="100"></div>
                 <div class="field-grid">
                   <label>止盈目标方式<select name="targetMode"><option value="r">按价格 R 倍数</option><option value="price">指定目标价格</option></select></label>
                   <label id="target-r-field">目标 R<input name="targetR" type="number" min="0.1" max="20" step="0.1" inputmode="decimal"></label>
                   <label id="target-price-field" hidden>目标价格<input name="targetPrice" type="number" min="0.01" step="0.01" inputmode="decimal"></label>
                 </div>
-                <p class="field-note">填股数和买入价，金额自动换算；也可切换为金额预算。单轮及账户合计风险检查保持 1%。</p>
+                <p class="field-note">金额自动换算，风险上限保持 1%。</p></details>
               </form>
               <div id="calc-results" aria-live="polite" aria-atomic="true"></div>
             </div>
@@ -73,14 +73,14 @@
             <details class="risk-details"><summary>止损执行与计算口径</summary><p>价格 R = 买入价 − 技术止损价；1.5R／2R 价格按此距离推导。计划风险按入场价与技术止损价的距离计算。实际 R = 成交盈亏 ÷ 冻结的初始计划风险。目标触价不等于实际成交。</p><p>普通止损触发后通常转为市价单，不能保证止损价成交。跳空和滑点会使真实损失超过计划预算。盘前盘后是否生效、触发条件与可用订单类型需向券商核实；止损限价单也可能无法成交。</p><p>SOXL／LABU 追求每日 3 倍、AGQ／MSTU 追求每日 2 倍；多日累计收益会偏离该倍数。当前标的的产品说明位于工作台上方。<a href="https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-14" target="_blank" rel="noopener noreferrer">订单说明 ↗</a></p></details>
           </section>
           <section class="panel checklist-panel" aria-labelledby="check-title">
-            <div class="section-title"><div><span class="micro">02 / PRE-TRADE CHECK</span><h2 id="check-title">入场前，逐项确认。</h2></div><span id="check-progress" class="count-tag">0 / 9</span></div>
+            <div class="section-title"><div><span class="micro">02 / PRE-TRADE CHECK</span><h2 id="check-title">入场前，逐项确认。</h2></div><span class="tag">提前计划时使用</span></div>
             <label class="full-field">所选标的环境<select id="environment"><option value="neutral">Neutral · 谨慎，减少频率</option><option value="risk-on">Risk-on · 允许观察入场</option><option value="risk-off">Risk-off · 不开新左侧多头</option></select></label>
             <label class="full-field">入场类型<select id="strategy"><option value="support">大级别支撑反弹</option><option value="trend">上涨趋势确认</option></select></label>
-            <div id="checklist"></div>
-            <label class="full-field">我为什么买？<textarea id="entry-reason" rows="2" placeholder="支撑位置、15／30 分钟信号、失效条件"></textarea></label>
-            <label class="full-field">事件与隔夜风险<textarea id="event-notes" rows="2" placeholder="无重大事件也请说明；有事件时说明是否隔夜"></textarea></label>
+            <details class="compact-details"><summary>展开入场检查清单 <span id="check-progress">0 / 9</span></summary><div id="checklist"></div>
+            
+            <label class="full-field">事件与隔夜风险<textarea id="event-notes" rows="2" placeholder="无重大事件也请说明；有事件时说明是否隔夜"></textarea></label></details>
             <div id="readiness" class="readiness" aria-live="polite"></div>
-            <button id="create-round" class="primary-button full-width">保存计划与清单 →</button><p class="field-note">保存计划不会生成成交。实际买卖请到执行日志记录。</p>
+            <p class="field-note">提前存计划是可选项；已有计划可直接确认成交，不重复填写。</p>
           </section>
         </div>
         <section class="panel recent-panel"><div class="section-title"><div><span class="micro">03 / EXECUTION & REVIEW</span><h2>最近交易与账户表现</h2></div><a class="text-link" href="#journal">全部记录 ↗</a></div><div id="home-stats" class="mini-stats"></div><div id="recent-rounds"></div></section>
@@ -101,7 +101,7 @@
         <div class="method-note"><h3>这是一套待检验的制度。</h3><p>1.5R～2R、2R 卖出 50% 后保本并跟踪结构、环境过滤都是待验证假设。真实记录用于验证执行与结果；网站不宣称策略盈利，不输出预计年化收益。观察工具与产品基准并不总相同：SOXX／SLV／XBI／MSTR 用于观察对应底层；BTC 仅作 MSTU 的背景参考；各产品的正式基准以发行方为准。每个标的的规则效果均需独立验证。</p></div>
       </section>
       <section id="page-journal" class="page" hidden aria-labelledby="journal-title">
-        <div class="page-heading"><div><p class="eyebrow">ACTUAL FILLS / NO ASSUMPTIONS</p><h1 id="journal-title">执行日志</h1><p class="subtitle">一轮交易，一条完整的决策与成交流水。</p></div><button id="new-plan-button" class="primary-button">＋ 新建 SOXL 计划</button></div>
+        <div class="page-heading"><div><p class="eyebrow">ACTUAL FILLS / NO ASSUMPTIONS</p><h1 id="journal-title">执行日志</h1><p class="subtitle">一轮交易，一条完整的决策与成交流水。</p></div><button id="new-plan-button" class="primary-button">＋ 记录买入</button></div>
         <div class="journal-toolbar"><label class="filter-label">标的<select id="journal-symbol"><option value="all">全部标的</option><option>SOXL</option><option>AGQ</option><option>LABU</option><option>RAM</option><option>IRE</option><option>MSTU</option></select></label><div class="segmented" id="journal-filters"><button data-filter="all" class="selected">全部</button><button data-filter="open">持仓中</button><button data-filter="closed">已退出</button><button data-filter="planned">计划</button><button data-filter="history">旧持仓历史</button></div><button id="history-button" class="quiet-button">＋ 历史记录</button></div>
         <div id="journal-list"></div>
       </section>

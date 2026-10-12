@@ -176,9 +176,9 @@ export function previewFill(round, fill, options={}) {
     const remainingReward=after.qty*target-after.basis-Number(round.plan.costs)/2;
     if(!positive(target)||target<=fill.price) violations.push('实际买入后的目标价格必须高于本笔买入价；右侧加仓需重新评估目标空间。');
     else if(rp.risk>EPS && remainingReward/rp.risk+EPS<RULES.minNetRR) violations.push('按实际成交价与当前止损计算，剩余仓位扣费后目标空间不足 1.5R。');
-    if(!CHECKS.every(([id])=>round.checks[id]===true)) violations.push('该轮入场检查清单尚未全部确认。');
+    if(round.entrySource!=='actual'&&!CHECKS.every(([id])=>round.checks[id]===true)) violations.push('该轮入场检查清单尚未全部确认。');
     if(!round.entryReason.trim()) violations.push('缺少入场依据。');
-    if(!round.events.trim()) violations.push('缺少重大事件与隔夜风险评估。');
+    if(round.entrySource!=='actual'&&!round.events.trim()) violations.push('缺少重大事件与隔夜风险评估。');
     if(!round.exitPlan.trim()) violations.push('持仓必须有明确的退出规则。');
     if(round.environment==='risk-off' && round.strategy==='support') violations.push('Risk-off：原则上不开新的左侧支撑反弹多头。');
     if(options.guard?.blocked) violations.push(...options.guard.reasons);
@@ -253,6 +253,7 @@ export function validateState(input) {
   const ids=new Set(); const unique=id=>{assert(string(id,200)&&id.length>0&&!ids.has(id),'存在缺失或重复的数据 ID。');ids.add(id);};
   for(const r of input.rounds) {
     unique(r.id);assert(['active','history'].includes(r.scope),'交易分类无效。');
+    assert(r.entrySource===undefined||['plan','actual'].includes(r.entrySource),'交易记录来源无效。');
     assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易只能记录 SOXL、AGQ、LABU、MSTU。');
     assert(['risk-on','neutral','risk-off'].includes(r.environment)&&['support','trend'].includes(r.strategy),'市场环境或入场策略无效。');
     assert(obj(r.plan)&&obj(r.checks)&&obj(r.review),'交易计划／检查／复盘信息缺失。');
@@ -319,6 +320,53 @@ export function newRound(state, {scope='active',symbol=state.draft.symbol??'SOXL
   const plan=structuredClone(d.plan);
   if(plan.quantity!==undefined)plan.amount=tradeAmount(plan.quantity,plan.entry);
   return {id:uid(),symbol,scope,title:title||`${symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan,initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS&&(scope!=='active'||combined.portfolio.valid&&combined.combinedRisk<=c.budget+EPS):k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),checkLabels:Object.fromEntries(checksFor(symbol)),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'默认测试：2R 实际减仓 50%；确认卖出后将剩余止损上移至实际成本均价，已有更高止损不下移；之后按 30 分钟结构继续上移。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
+}
+export function prepareQuickFill(state,roundId,input,now=new Date().toISOString()) {
+  const original=state.rounds.find(r=>r.id===roundId);
+  assert(original,'找不到对应交易轮。');
+  const round=structuredClone(original);
+  assert(stamp(input.at)&&Date.parse(input.at)<=Date.parse(now)+60000,'成交时间无效或在未来。');
+  const before=accounting(round);
+  assert(!before.closed,'本轮已退出，请新建买入记录。');
+  const side=input.side,kind=side==='buy'?(before.qty?'add':'entry'):(Number(input.qty)===before.qty?'exit':'partial');
+  assert(['buy','sell'].includes(side),'成交方向无效。');
+  assert(string(input.reason)&&input.reason.trim().length>0,'请填写简短成交理由。');
+  assert(['manual','target','stop','structure','other'].includes(input.reasonCode??'manual'),'成交原因无效。');
+  if(round.entrySource!=='actual'&&side==='buy'&&!before.bought){
+    assert(Date.parse(input.at)+1000>=Date.parse(round.createdAt),'成交早于这份计划；请使用成交后补录，不能追溯记为提前计划。');
+  }
+  const fill={id:uid(),sequence:Math.max(-1,...round.fills.map(f=>f.sequence))+1,at:input.at,side,kind,qty:Number(input.qty),price:Number(input.price),fee:0,plannedPrice:null,targetPrice:input.targetPrice?Number(input.targetPrice):null,reason:input.reason.trim(),reasonCode:input.reasonCode??'manual',trendConfirmed:input.trendConfirmed===true,violations:[]};
+  const all=sortFills([...round.fills,fill]),index=all.findIndex(f=>f.id===fill.id);
+  const preceding={...round,fills:all.slice(0,index)};
+  const heldAtFill=accounting(preceding).qty;
+  fill.kind=side==='buy'?(heldAtFill?'add':'entry'):(Number(input.qty)===heldAtFill?'exit':'partial');
+  // Validate the complete timeline as well as the immediate post-fill position.
+  accounting({...round,fills:all});
+  const equity=Date.parse(now)-Date.parse(fill.at)<86400000?Number(state.draft.plan.equity):Number(round.plan.equity);
+  const check=previewFill(preceding,fill,{currentEquity:equity,guard:tradingGuard(state,fill.at),portfolio:portfolioRisk(state,{excludeId:round.id,asOf:fill.at}),otherOpen:state.rounds.some(r=>r.id!==round.id&&r.scope==='active'&&r.symbol===round.symbol&&accounting({...r,fills:r.fills.filter(f=>Date.parse(f.at)<=Date.parse(input.at))}).qty>0)});
+  fill.violations=check.violations;
+  round.fills.push(fill);
+  if(fill.violations.length)round.review.compliant=false;
+  return {round,fill,check};
+}
+export function prepareQuickBuy(state,input,now=new Date().toISOString()) {
+  const symbol=input.symbol??state.draft.symbol??'SOXL';
+  assert(Object.hasOwn(SYMBOLS,symbol),'只支持四个主动交易标的。');
+  if(input.planId){
+    const planned=state.rounds.find(r=>r.id===input.planId);
+    assert(planned&&planned.scope==='active'&&planned.symbol===symbol,'计划与选择标的不一致。');
+    assert(planned.fills.length===0,'这份计划已登记成交，请从持仓卡片记录后续操作，避免重复确认。');
+    return {...prepareQuickFill(state,planned.id,{...input,side:'buy',reason:input.reason||planned.entryReason},now),isNew:false};
+  }
+  assert(!state.rounds.some(r=>r.scope==='active'&&r.symbol===symbol&&accounting(r).qty>0),'该标的已有持仓，请从持仓卡片记录加仓。');
+  const copy=structuredClone(state);
+  copy.draft={...copy.draft,symbol,checks:{},reason:input.reason??'',events:''};
+  copy.draft.plan={...copy.draft.plan,quantity:Number(input.qty),amount:tradeAmount(input.qty,input.price),entry:Number(input.price),stop:Number(input.stop),targetMode:input.targetPrice?'price':'r',targetPrice:input.targetPrice?Number(input.targetPrice):'',targetR:2,costs:0,gapPct:0};
+  const round=newRound(copy);
+  round.entrySource='actual';
+  // These are post-fill numeric checks, never invented pre-entry confirmations.
+  for(const [key] of CHECKS)if(!['risk','reward'].includes(key))round.checks[key]=false;
+  return {...prepareQuickFill({...state,rounds:[...state.rounds,round]},round.id,{...input,side:'buy'},now),isNew:true};
 }
 export function mergeStates(local, imported) {
   validateState(local);validateState(imported);
