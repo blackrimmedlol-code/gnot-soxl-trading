@@ -53,17 +53,19 @@
               <form id="calculator-form" autocomplete="off">
                 <div class="field-grid">
                   <label>当前账户总权益<input name="equity" type="number" min="1" max="100000000" step="0.01" inputmode="decimal" required></label>
-                  <label>计划投入金额<input name="amount" type="number" min="1" step="0.01" inputmode="decimal" required></label>
+                  <label>仓位输入方式<select name="sizingMode"><option value="shares">按股数（自动算金额）</option><option value="amount">按金额预算</option></select></label>
+                  <label id="quantity-field">计划股数<input name="quantity" type="number" min="1" step="1" placeholder="输入整股数" inputmode="numeric"></label>
+                  <label id="plan-amount-field"><span id="plan-amount-label">计划金额（自动换算）</span><input name="amount" type="number" min="0.0001" step="any" inputmode="decimal" readonly></label>
                   <label>计划买入价<input name="entry" type="number" min="0.01" step="0.01" placeholder="输入价格" inputmode="decimal" required></label>
                   <label>技术止损价<input name="stop" type="number" min="0.01" step="0.01" placeholder="支撑失效位置" inputmode="decimal" required></label>
                 </div>
-                <div class="range-row"><label for="amount-slider">计划金额 <span id="amount-slider-label"></span></label><input id="amount-slider" aria-label="调整计划金额" type="range" min="500" max="10000" step="100"></div>
+                <div class="range-row" id="amount-range" hidden><label for="amount-slider">计划金额 <span id="amount-slider-label"></span></label><input id="amount-slider" aria-label="调整计划金额" type="range" min="500" max="10000" step="100"></div>
                 <div class="field-grid">
                   <label>止盈目标方式<select name="targetMode"><option value="r">按价格 R 倍数</option><option value="price">指定目标价格</option></select></label>
                   <label id="target-r-field">目标 R<input name="targetR" type="number" min="0.1" max="20" step="0.1" inputmode="decimal"></label>
                   <label id="target-price-field" hidden>目标价格<input name="targetPrice" type="number" min="0.01" step="0.01" inputmode="decimal"></label>
                 </div>
-                <p class="field-note">整股投入不超计划金额。按价格计算风险与盈亏；输入不代表实时行情。</p>
+                <p class="field-note">填股数和买入价，金额自动换算；也可切换为金额预算。单轮及账户合计风险检查保持 1%。</p>
               </form>
               <div id="calc-results" aria-live="polite" aria-atomic="true"></div>
             </div>

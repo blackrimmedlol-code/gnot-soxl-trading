@@ -45,11 +45,18 @@ export const uid = () => globalThis.crypto?.randomUUID?.() ?? `gnot-${Date.now()
 export function defaultState() {
   return {schemaVersion:1, revision:0, settings:{initialEquity:25000, startDate:'2026-11-01'}, rounds:[], snapshots:[], drawdownReviews:[], draft:{symbol:'SOXL',plan:{equity:25000, amount:5000, entry:'', stop:'', targetMode:'r', targetR:2, targetPrice:'', costs:0, gapPct:0, scenarioPct:5}, environment:'neutral', strategy:'support', checks:{}, reason:'', events:''}, meta:{updatedAt:null, lastExport:null}};
 }
+export function tradeAmount(quantity,price) {
+  const qty=n(quantity),value=n(price);
+  return Number.isSafeInteger(qty)&&qty>0&&positive(value)&&finite(qty*value)?qty*value:null;
+}
 export function calculatePlan(input) {
-  const equity=n(input.equity), amount=n(input.amount), entry=n(input.entry), stop=n(input.stop), costs=n(input.costs), gapPct=n(input.gapPct), targetR=n(input.targetR);
+  const hasQuantity=input.quantity!==undefined,quantity=n(input.quantity);
+  const equity=n(input.equity), amount=hasQuantity?tradeAmount(input.quantity,input.entry):n(input.amount), entry=n(input.entry), stop=n(input.stop), costs=n(input.costs), gapPct=n(input.gapPct), targetR=n(input.targetR);
   const errors=[];
   if(!positive(equity)) errors.push('账户权益必须大于 0。');
-  if(!positive(amount)) errors.push('计划金额必须大于 0。');
+  if(hasQuantity&&(!Number.isSafeInteger(quantity)||quantity<1)) errors.push('计划股数必须是大于 0 的整数。');
+  if(hasQuantity&&Number.isSafeInteger(quantity)&&quantity>0&&positive(entry)&&amount===null) errors.push('股数与价格对应的金额超出可计算范围。');
+  if(!hasQuantity&&!positive(amount)) errors.push('计划金额必须大于 0。');
   if(!positive(entry)) errors.push('请输入大于 0 的计划买入价。');
   if(!positive(stop) || stop >= entry) errors.push('技术止损必须大于 0，且低于买入价。');
   if(!finite(costs) || costs<0) errors.push('预估往返费用不能为负数。');
@@ -58,7 +65,7 @@ export function calculatePlan(input) {
   const target = input.targetMode==='price' ? n(input.targetPrice) : entry + (entry-stop)*targetR;
   if(!positive(target) || target<=entry) errors.push('目标价格必须高于买入价。');
   if(errors.length) return {valid:false, errors, violations:[], pass:false};
-  const qty=Math.floor((amount+EPS)/entry);
+  const qty=hasQuantity?quantity:Math.floor((amount+EPS)/entry);
   if(qty<1) return {valid:false,errors:['计划金额不足以买入 1 股。'],violations:[],pass:false};
   const invested=qty*entry, priceRisk=qty*(entry-stop), risk=priceRisk+costs, budget=equity*RULES.riskPct;
   const gain=qty*(target-entry)-costs, netRR=gain/risk;
@@ -250,6 +257,7 @@ export function validateState(input) {
     assert(['risk-on','neutral','risk-off'].includes(r.environment)&&['support','trend'].includes(r.strategy),'市场环境或入场策略无效。');
     assert(obj(r.plan)&&obj(r.checks)&&obj(r.review),'交易计划／检查／复盘信息缺失。');
     const p=calculatePlan(r.plan);
+    if(r.plan.quantity!==undefined){const value=tradeAmount(r.plan.quantity,r.plan.entry);assert(value!==null&&Math.abs(n(r.plan.amount)-value)<EPS,'计划金额与记录股数、价格不一致。');}
     if(r.scope==='active'||p.valid){assert(p.valid,'导入交易计划无效：'+p.errors.join(' '));assert(positive(r.initialRisk)&&Math.abs(r.initialRisk-p.risk)<EPS,'冻结的初始风险与原始计划不一致。');}
     else {assert(r.initialRisk===null&&positive(n(r.plan.entry))&&positive(n(r.plan.amount))&&(r.plan.stop===''||r.plan.stop===null),'历史计划缺少基础金额／价格，或未知初始风险被填为数值。');}
     assert(stamp(r.createdAt)&&string(r.title,300)&&string(r.entryReason)&&string(r.exitPlan)&&string(r.events),'交易轮时间或文本无效。');
@@ -291,6 +299,8 @@ export function validateState(input) {
     assert(string(d.reason)&&string(d.events),'草稿文本无效。');
     for(const key of ['equity','amount','entry','stop','targetR','targetPrice','costs','gapPct','scenarioPct'])assert(d.plan[key]===''||finite(Number(d.plan[key])),'草稿输入含非法数值。');
     assert(['r','price'].includes(d.plan.targetMode),'目标模式无效。');
+    assert(d.sizingMode===undefined||['shares','amount'].includes(d.sizingMode),'仓位输入方式无效。');
+    for(const value of [d.quantity,d.plan.quantity])assert(value===undefined||value===''||finite(n(value)),'股数草稿含非法数值。');
   }
   validateDraft(input.draft);
   if(input.symbolDrafts!==undefined){
@@ -306,7 +316,9 @@ export function newRound(state, {scope='active',symbol=state.draft.symbol??'SOXL
   if(scope==='active'&&!Object.hasOwn(SYMBOLS,symbol))throw Error('只支持 SOXL、AGQ、LABU、MSTU。');
   if(!c.valid && (scope==='active'||!positive(n(d.plan.entry))||!positive(n(d.plan.amount))||(d.plan.stop!==''&&d.plan.stop!==null))) throw Error(c.errors.join(' '));
   const combined=scope==='active'?calculateDraft(state):c;
-  return {id:uid(),symbol,scope,title:title||`${symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan:structuredClone(d.plan),initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS&&(scope!=='active'||combined.portfolio.valid&&combined.combinedRisk<=c.budget+EPS):k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),checkLabels:Object.fromEntries(checksFor(symbol)),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'默认测试：2R 实际减仓 50%；确认卖出后将剩余止损上移至实际成本均价，已有更高止损不下移；之后按 30 分钟结构继续上移。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
+  const plan=structuredClone(d.plan);
+  if(plan.quantity!==undefined)plan.amount=tradeAmount(plan.quantity,plan.entry);
+  return {id:uid(),symbol,scope,title:title||`${symbol} · ${d.strategy==='support'?'支撑反弹':'上涨趋势'}`,createdAt:new Date().toISOString(),environment:d.environment,strategy:d.strategy,plan,initialRisk:c.valid?c.risk:null,checks:Object.fromEntries(CHECKS.map(([k])=>[k,k==='risk'?c.valid&&c.risk<=c.budget+EPS&&(scope!=='active'||combined.portfolio.valid&&combined.combinedRisk<=c.budget+EPS):k==='reward'?c.valid&&c.netRR+EPS>=1.5:!!d.checks[k]])),checkLabels:Object.fromEntries(checksFor(symbol)),entryReason:d.reason,exitPlan:scope==='history'?'历史退出规则未补录；请根据原始记录保存，不猜测。':'默认测试：2R 实际减仓 50%；确认卖出后将剩余止损上移至实际成本均价，已有更高止损不下移；之后按 30 分钟结构继续上移。',events:d.events,fills:[],stopEvents:[],mark:null,review:{compliant:null,rating:0,notes:''}};
 }
 export function mergeStates(local, imported) {
   validateState(local);validateState(imported);
