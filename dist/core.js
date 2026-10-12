@@ -1,6 +1,20 @@
 // Pure, dependency-free financial functions. No market data or order routing.
 export const SCHEMA_VERSION = 1;
 export const RULES = Object.freeze({riskPct: .01, initialEquity: 25000, initialAmount: 5000, minNetRR: 1.5, pauseDD: .05, haltDD: .10});
+export const EXECUTION_PROFILES=Object.freeze({
+  SOXL:Object.freeze({stopPct:.0215,targetR:2,asOf:'2026-10-13'}),
+  AGQ:Object.freeze({stopPct:.0120,targetR:2,asOf:'2026-10-13'}),
+  LABU:Object.freeze({stopPct:.0255,targetR:2,asOf:'2026-10-13'}),
+  MSTU:Object.freeze({stopPct:.0330,targetR:2,asOf:'2026-10-13'})
+});
+export function executionPrices(symbol,entry,profile=EXECUTION_PROFILES[symbol]) {
+  const price=Number(entry);
+  if(!profile||!Number.isFinite(price)||price<=0||!Number.isFinite(profile.stopPct)||profile.stopPct<=0||profile.stopPct>=1)return null;
+  const stop=Number((price*(1-profile.stopPct)).toFixed(8));
+  const target=Number((price+2*(price-stop)).toFixed(8));
+  if(stop<=0||stop>=price||!Number.isFinite(target))return null;
+  return {entry:price,stop,target,stopPct:profile.stopPct,targetPct:profile.stopPct*2,targetR:2,asOf:profile.asOf};
+}
 export const SYMBOLS = Object.freeze({
   SOXL: {name:'半导体', leverage:'3× DAILY', reference:'QQQ／SOXX', url:'https://www.direxion.com/product/daily-semiconductor-bull-bear-3x-etfs', note:'半导体每日三倍。SOXX 为观察参考，实际基准以发行方为准。'},
   AGQ: {name:'白银', leverage:'2× DAILY', reference:'白银期货／SLV', url:'https://www.proshares.com/our-etfs/leveraged-and-inverse/agq', note:'白银期货指数每日两倍。SLV 仅作观察参考；期货展期、隔夜行情与现货可能产生差异。'},
@@ -182,7 +196,7 @@ export function previewFill(round, fill, options={}) {
     if(!round.exitPlan.trim()) violations.push('持仓必须有明确的退出规则。');
     if(round.environment==='risk-off' && round.strategy==='support') violations.push('Risk-off：原则上不开新的左侧支撑反弹多头。');
     if(options.guard?.blocked) violations.push(...options.guard.reasons);
-    if(options.otherOpen) violations.push(`已有另一轮 ${round.symbol} 持仓，请在同一轮记录成交或先退出。`);
+    if(options.otherOpen&&round.executionModel?.mode!=='fixed-2r') violations.push(`已有另一轮 ${round.symbol} 持仓，请在同一轮记录成交或先退出。`);
   }
   return {before,after,risk:rp,budget,violations:[...new Set(violations)],pass:!violations.length};
 }
@@ -257,6 +271,11 @@ export function validateState(input) {
     assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易只能记录 SOXL、AGQ、LABU、MSTU。');
     assert(['risk-on','neutral','risk-off'].includes(r.environment)&&['support','trend'].includes(r.strategy),'市场环境或入场策略无效。');
     assert(obj(r.plan)&&obj(r.checks)&&obj(r.review),'交易计划／检查／复盘信息缺失。');
+    if(r.executionModel!==undefined){
+      const m=r.executionModel,exit=executionPrices(r.symbol,r.plan.entry,m);
+      assert(obj(m)&&m.mode==='fixed-2r'&&m.targetR===2&&string(m.asOf,20)&&/^\d{4}-\d{2}-\d{2}$/.test(m.asOf)&&finite(Date.parse(m.asOf))&&exit,'执行规则快照无效。');
+      assert(Math.abs(Number(r.plan.stop)-exit.stop)<EPS&&r.plan.targetMode==='r'&&Number(r.plan.targetR)===2,'冻结的退出价格与参考参数快照不一致。');
+    }
     const p=calculatePlan(r.plan);
     if(r.plan.quantity!==undefined){const value=tradeAmount(r.plan.quantity,r.plan.entry);assert(value!==null&&Math.abs(n(r.plan.amount)-value)<EPS,'计划金额与记录股数、价格不一致。');}
     if(r.scope==='active'||p.valid){assert(p.valid,'导入交易计划无效：'+p.errors.join(' '));assert(positive(r.initialRisk)&&Math.abs(r.initialRisk-p.risk)<EPS,'冻结的初始风险与原始计划不一致。');}
@@ -367,6 +386,61 @@ export function prepareQuickBuy(state,input,now=new Date().toISOString()) {
   // These are post-fill numeric checks, never invented pre-entry confirmations.
   for(const [key] of CHECKS)if(!['risk','reward'].includes(key))round.checks[key]=false;
   return {...prepareQuickFill({...state,rounds:[...state.rounds,round]},round.id,{...input,side:'buy'},now),isNew:true};
+}
+export function prepareExecutionBuy(state,input,now=new Date().toISOString()) {
+  const symbol=input.symbol??state.draft.symbol??'SOXL',exit=executionPrices(symbol,input.price);
+  assert(exit,'请输入有效买入价与支持的标的。');
+  assert(stamp(input.at)&&Date.parse(input.at)<=Date.parse(now)+60000,'成交时间无效或在未来。');
+  assert(string(input.reason)&&input.reason.trim().length>0,'请填写一句话买入理由。');
+  const copy=structuredClone(state);
+  copy.draft={...copy.draft,symbol,checks:{},reason:input.reason.trim(),events:'',environment:'neutral'};
+  copy.draft.plan={...copy.draft.plan,quantity:Number(input.qty),amount:tradeAmount(input.qty,input.price),entry:Number(input.price),stop:exit.stop,targetMode:'r',targetR:2,targetPrice:'',costs:0,gapPct:0};
+  const round=newRound(copy);
+  round.entrySource='actual';round.executionModel={mode:'fixed-2r',...EXECUTION_PROFILES[symbol]};
+  round.exitPlan='固定 −1R 初始止损；+2R 全部退出；+1R 不操作；后续右侧买入独立记账。';
+  for(const [key]of CHECKS)if(!['risk','reward'].includes(key))round.checks[key]=false;
+  return prepareExecutionFill({...state,rounds:[...state.rounds,round]},round.id,{...input,side:'buy'},now);
+}
+export function prepareExecutionFill(state,roundId,input,now=new Date().toISOString()) {
+  const original=state.rounds.find(r=>r.id===roundId);assert(original,'找不到这笔交易。');
+  const round=structuredClone(original),old=input.editId?round.fills.find(f=>f.id===input.editId):null;
+  if(input.editId)assert(old,'找不到要更正的成交。');
+  assert(stamp(input.at)&&Date.parse(input.at)<=Date.parse(now)+60000,'成交时间无效或在未来。');
+  const side=old?.side??input.side;assert(['buy','sell'].includes(side),'成交方向无效。');
+  if(old&&side==='buy'&&round.executionModel){
+    const exit=executionPrices(round.symbol,input.price,round.executionModel);
+    assert(exit&&tradeAmount(input.qty,input.price)!==null,'更正买入价或整股数无效。');
+    Object.assign(round.plan,{entry:Number(input.price),quantity:Number(input.qty),amount:tradeAmount(input.qty,input.price),stop:exit.stop});
+    round.initialRisk=calculatePlan(round.plan).risk;
+    if(input.reason?.trim())round.entryReason=input.reason.trim();
+  }
+  if(round.executionModel&&side==='buy'&&!old)assert(!round.fills.length,'后续买入请独立建立交易记录。');
+  const code=input.reasonCode??old?.reasonCode??'manual';assert(['manual','target','stop','structure','other'].includes(code),'成交原因无效。');
+  const reason=input.reason?.trim()||old?.reason||code;assert(string(reason)&&reason.length>0,'成交理由无效。');
+  const fill={...old,id:old?.id??uid(),sequence:old?.sequence??Math.max(-1,...round.fills.map(f=>f.sequence))+1,at:input.at,side,qty:Number(input.qty),price:Number(input.price),fee:old?.fee??0,plannedPrice:old?.plannedPrice??null,targetPrice:old?.targetPrice??null,kind:side==='buy'?(old?.kind??'entry'):'partial',reason,reasonCode:code,trendConfirmed:old?.trendConfirmed??false,violations:[]};
+  const all=sortFills([...round.fills.filter(f=>f.id!==old?.id),fill]),index=all.findIndex(f=>f.id===fill.id),before={...round,fills:all.slice(0,index)};
+  const held=accounting(before).qty;
+  if(side==='sell')fill.kind=fill.qty===held?'exit':'partial';
+  accounting({...round,fills:all});
+  const equity=Date.parse(now)-Date.parse(fill.at)<86400000?Number(state.draft.plan.equity):Number(round.plan.equity);
+  const check=previewFill(before,fill,{currentEquity:equity,guard:tradingGuard(state,fill.at),portfolio:portfolioRisk(state,{excludeId:round.id,asOf:fill.at}),otherOpen:state.rounds.some(r=>r.id!==round.id&&r.scope==='active'&&r.symbol===round.symbol&&accounting({...r,fills:r.fills.filter(f=>Date.parse(f.at)<=Date.parse(input.at))}).qty>0)});
+  if(round.executionModel&&side==='sell'){
+    if(fill.qty<held)check.violations.push('部分卖出偏离本轮 +2R 全额退出规则。');
+    if(code!=='stop'&&fill.price<calculatePlan(round.plan).target-.005)check.violations.push('本次退出未到 +2R，偏离固定退出规则。');
+  }
+  check.violations=[...new Set([...(old?.violations??[]),...check.violations])];check.pass=!check.violations.length;fill.violations=check.violations;
+  round.fills=all;
+  if(old&&side==='buy'&&round.executionModel){
+    const target=calculatePlan(round.plan).target;
+    for(const row of accounting(round).rows.filter(f=>f.side==='sell')){
+      const f=round.fills.find(f=>f.id===row.id),flags=[...f.violations];
+      if(row.remaining>0)flags.push('部分卖出偏离本轮 +2R 全额退出规则。');
+      if(f.reasonCode!=='stop'&&f.price<target-.005)flags.push('本次退出未到 +2R，偏离固定退出规则。');
+      f.violations=[...new Set(flags)];
+    }
+  }
+  if(round.fills.some(f=>f.violations.length))round.review.compliant=false;
+  return {round,fill,check};
 }
 export function mergeStates(local, imported) {
   validateState(local);validateState(imported);

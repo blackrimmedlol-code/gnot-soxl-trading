@@ -1,8 +1,8 @@
 {
   "name": "gnot-soxl-trading",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "SOXL、AGQ、LABU、MSTU 交易执行与复盘，V1.2",
+  "description": "SOXL、AGQ、LABU、MSTU 交易执行与复盘，V2",
   "scripts": {"test": "node --test tests/*.test.mjs", "check": "node --check dist/app.js && node --check dist/core.js && node --check dist/storage.js && node --check scripts/package-pages.mjs", "build:pages": "node scripts/package-pages.mjs"}
 }
