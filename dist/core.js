@@ -285,6 +285,11 @@ export function validateState(input) {
         assert(Math.abs(stop-m.stop)<EPS&&Math.abs(Number(r.plan.stop)-m.stop)<EPS,'结构／ATR 止损与入场快照不一致。');
         assert(['SOXL','GDXU','BITX'].includes(r.symbol),'新纪律仅支持 SOXL、GDXU、BITX。');
         assert(Array.isArray(r.stopEvents)&&r.stopEvents.length===0,'新纪律不移动初始止损。');
+        if(m.ruleVersion!==undefined){
+          assert(m.ruleVersion==='1.1'&&obj(m.riskSnapshot),'新纪律版本或风险档位快照缺失。');
+          const z=m.riskSnapshot;
+          assert([0,.5,1].includes(z.k)&&positive(z.equity)&&finite(z.singleBudget)&&finite(z.totalBudget)&&Math.abs(z.singleBudget-z.equity*.015*z.k)<EPS&&Math.abs(z.totalBudget-z.equity*.03*z.k)<EPS&&Number.isInteger(z.cycle)&&z.cycle>0&&stamp(z.at),'冻结风险档位预算无效。');
+        }
       }
       assert(r.plan.targetMode==='r'&&Number(r.plan.targetR)===2,'冻结的目标必须保持 +2R。');
     }
@@ -297,6 +302,9 @@ export function validateState(input) {
     if(r.checkLabels!==undefined)assert(obj(r.checkLabels)&&CHECKS.every(([id])=>string(r.checkLabels[id],2000)),'冻结清单文本无效。');
     assert(typeof r.review.compliant==='boolean'||r.review.compliant===null,'规则遵守评价无效。');
     assert(string(r.review.notes)&&Number.isInteger(r.review.rating)&&r.review.rating>=0&&r.review.rating<=5,'复盘评价无效。');
+    assert(r.review.reviewedAt===undefined||stamp(r.review.reviewedAt),'复盘时间无效。');
+    assert(r.review.stopReentry===undefined||['pending','yes','no'].includes(r.review.stopReentry),'止损后新买点观察无效。');
+    assert(r.review.stopObservedAt===undefined||stamp(r.review.stopObservedAt),'止损观察时间无效。');
     assert(Array.isArray(r.fills)&&r.fills.length<=10000&&Array.isArray(r.stopEvents),'成交／止损记录无效。');
     for(const f of r.fills) {
       unique(f.id);assert(stamp(f.at)&&['buy','sell'].includes(f.side)&&['entry','add','partial','exit'].includes(f.kind),'成交时间／类型无效。');
@@ -306,6 +314,7 @@ export function validateState(input) {
       assert(f.targetPrice===undefined||f.targetPrice===null||positive(f.targetPrice),'本笔目标价格无效。');
       assert(string(f.reason)&&['manual','target','stop','structure','other'].includes(f.reasonCode),'成交理由无效。');
       assert(Array.isArray(f.violations)&&f.violations.every(x=>string(x,2000))&&typeof f.trendConfirmed==='boolean','成交纪律记录无效。');
+      assert(f.unverified===undefined||(Array.isArray(f.unverified)&&f.unverified.every(x=>string(x,2000))),'待核对资料记录无效。');
       assert(Number.isInteger(f.sequence)&&f.sequence>=0,'成交序号无效。');
     }
     let prior=Number(r.plan.stop), priorAt=-Infinity;
@@ -342,12 +351,21 @@ export function validateState(input) {
   if(input.workbench!==undefined){
     const w=input.workbench;assert(obj(w)&&w.version===1&&positive(n(w.equity))&&(w.cash===''||(finite(n(w.cash))&&n(w.cash)>=0))&&obj(w.inputs)&&Array.isArray(w.recoveries)&&w.recoveries.length<=1000,'纪律工作台数据无效。');
     assert(w.activatedAt===undefined||stamp(w.activatedAt),'纪律生效时间无效。');
+    assert(w.equityDay===undefined||(/^\d{4}-\d{2}-\d{2}$/.test(w.equityDay)&&finite(Date.parse(w.equityDay))),'当日净值确认日期无效。');
     for(const [symbol,data] of Object.entries(w.inputs)){
       assert(['SOXL','GDXU','BITX'].includes(symbol)&&obj(data),'纪律输入标的无效。');
-      for(const key of ['entry','atr','low','high','close30','close1h','ema20','ema50','current'])assert(data[key]===undefined||data[key]===''||(finite(n(data[key]))&&n(data[key])>0),'纪律行情输入含非法数值。');
+      for(const key of ['entry','atr','low','high','close30','close1h','ema20','ema50','current','requestedQty'])assert(data[key]===undefined||data[key]===''||(finite(n(data[key]))&&n(data[key])>0),'纪律行情输入含非法数值。');
       for(const key of ['signalAt','hourAt','currentAt'])assert(data[key]===undefined||data[key]===''||stamp(data[key]),'纪律行情时间无效。');
     }
-    for(const r of w.recoveries)assert(stamp(r.at)&&string(r.notes)&&r.notes.trim().length>=10,'恢复交易需填写至少10字复盘。');
+    for(const r of w.recoveries)assert(stamp(r.at)&&string(r.notes)&&r.notes.trim().length>=10&&(r.ordersResolved===undefined||typeof r.ordersResolved==='boolean'),'恢复交易需填写至少10字复盘。');
+    if(w.risk!==undefined){
+      const z=w.risk;assert(obj(z)&&z.version==='1.1'&&Array.isArray(z.closes)&&z.closes.length<=10000&&Array.isArray(z.transitions)&&z.transitions.length<=1000,'账户风险记录无效。');
+      assert(z.baseline===null||(obj(z.baseline)&&stamp(z.baseline.at)&&positive(z.baseline.equity)&&z.baseline.verified===true),'启用净值须经核对。');
+      assert(z.baseline!==null||(!z.closes.length&&!z.transitions.length),'未启用风险周期不能存在收盘或恢复记录。');
+      const days=new Set();
+      for(const c of z.closes){unique(c.id);assert(stamp(c.at)&&positive(c.equity)&&Array.isArray(c.flows)&&c.flows.length<=100&&string(c.note)&&Date.parse(c.at)>Date.parse(z.baseline.at),'收盘净值记录无效。');assert(!days.has(usDay(c.at)),'收盘净值存在重复交易日。');days.add(usDay(c.at));for(const f of c.flows)assert(obj(f)&&stamp(f.at)&&finite(f.amount)&&positive(f.equityBefore)&&f.equityBefore+f.amount>0,'出入金发生前净值或金额无效。');if(c.corrections!==undefined)assert(Array.isArray(c.corrections)&&c.corrections.length<=100&&c.corrections.every(x=>stamp(x.at)&&positive(x.equity)&&Array.isArray(x.flows)&&string(x.note)),'收盘更正记录无效。');}
+      for(const t of z.transitions){unique(t.id);assert(['normal','restart'].includes(t.kind)&&stamp(t.at)&&string(t.notes)&&t.notes.trim().length>=10&&string(t.anchorId,200)&&string(t.cause,30)&&typeof t.ordersChecked==='boolean'&&typeof t.causeResolved==='boolean','风险恢复记录无效。');assert(t.revokedAt===undefined||(stamp(t.revokedAt)&&string(t.revokedReason)&&t.revokedReason.trim().length>=10),'撤回恢复操作须保存时间及原因。');}
+    }
   }
   assert(obj(input.meta)&&Number.isInteger(input.revision)&&input.revision>=0,'备份元数据无效。');
   return structuredClone(input);
@@ -479,6 +497,13 @@ export function mergeStates(local, imported) {
   else if(imported.workbench&&result.workbench){
     const map=new Map(result.workbench.recoveries.map(r=>[r.at,r]));
     for(const r of imported.workbench.recoveries){if(map.has(r.at)&&map.get(r.at).notes!==r.notes)throw Error('恢复复盘记录冲突。');if(!map.has(r.at)){result.workbench.recoveries.push(structuredClone(r));map.set(r.at,r);}}
+    const a=result.workbench.risk,b=imported.workbench.risk;
+    if(b&&!a)result.workbench.risk=structuredClone(b);
+    else if(a&&b){
+      if(a.baseline&&b.baseline&&JSON.stringify(a.baseline)!==JSON.stringify(b.baseline))throw Error('风险周期启用净值冲突；请在主设备核对。');
+      if(!a.baseline&&b.baseline)a.baseline=structuredClone(b.baseline);
+      for(const key of ['closes','transitions']){const entries=new Map(a[key].map(x=>[x.id,x]));for(const row of b[key]){if(entries.has(row.id)&&JSON.stringify(entries.get(row.id))!==JSON.stringify(row))throw Error('风险周期记录冲突。');if(!entries.has(row.id)){a[key].push(structuredClone(row));entries.set(row.id,row);}}}
+    }
   }
   return validateState(result);
 }
