@@ -1,0 +1,51 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {defaultState,accounting,validateState,exportBackupCSV,importBackupCSV,prepareExecutionBuy,mergeStates} from '../dist/core.js';
+import {WATCHLIST,priceLevels,ensureWorkbench,marketClock,nextTradingDay,trendState,entrySignal,calculateWorkbench,prepareDisciplineBuy,prepareDisciplineFill,disciplineGuard,disciplinePortfolio} from '../dist/discipline.js';
+import {positionDecision} from '../dist/workbench-ui.js';
+const now='2026-10-19T14:35:00Z',bar='2026-10-19T14:30:00Z';
+const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-7,`${a} != ${b}`);
+function data(extra={}){return {entry:100,atr:3,low:96,high:99,close30:100,close1h:100,ema20:99,ema50:95,hourAt:bar,signalAt:bar,...extra};}
+function state(){const s=defaultState();s.settings.initialEquity=30000;s.settings.startDate='2026-01-01';ensureWorkbench(s);s.workbench.activatedAt='2026-01-01T00:00:00Z';s.workbench.inputs.SOXL=data();return s;}
+function buy(s,symbol='SOXL',extra={}){const p=prepareDisciplineBuy(s,{symbol,price:100,qty:33,reason:'测试用真实记录流程，不进入产品数据',at:now,...extra},now);s.rounds.push(p.round);return p;}
+function sell(s,id,price,extra={}){const p=prepareDisciplineFill(s,id,{side:'sell',qty:accounting(s.rounds.find(r=>r.id===id)).qty,price,reasonCode:'stop',reason:'测试退出',at:'2026-10-19T14:40:00Z',...extra},extra.now??'2026-10-19T14:40:00Z');s.rounds=s.rounds.map(r=>r.id===id?p.round:r);return p;}
+
+test('新池严格三只，空白价格不生成计算值',()=>{assert.deepEqual(WATCHLIST,['SOXL','GDXU','BITX']);for(const x of [{},data({atr:''}),data({entry:0}),data({low:-1}),data({atr:Infinity}),data({low:101})])assert.equal(priceLevels(x).valid,false);});
+test('结构与波动止损取低价，目标与风险分开',()=>{let x=priceLevels(data());near(x.stop,95.5);near(x.target,109);near(x.distance,4.5);x=priceLevels(data({low:94}));near(x.stop,93.7);near(x.target,112.6);assert.equal(priceLevels(data({low:80})).tooWide,true);});
+test('止损空间增加时股数下降，金额预算不扩张',()=>{const s=state(),a=calculateWorkbench(s,'SOXL',data(),now),b=calculateWorkbench(s,'SOXL',data({atr:4,low:95}),now);assert.equal(a.qty,33);assert.ok(b.referenceQty<a.referenceQty);assert.ok(b.referenceQty*b.levels.distance<=150);});
+test('只填三项显示参考33股，未核对买点时可执行0股',()=>{const s=state(),x=calculateWorkbench(s,'SOXL',{entry:100,atr:3,low:96},now);assert.equal(x.referenceQty,33);assert.equal(x.qty,0);assert.equal(x.ready,false);});
+test('完整收盘信号对应150风险预算、25%单仓和33股',()=>{const s=state(),x=calculateWorkbench(s,'SOXL',data(),now);assert.equal(x.ready,true);assert.equal(x.qty,33);assert.equal(x.qualified,1);assert.equal(x.cap,.25);near(x.singleBudget,150);near(x.totalBudget,450);});
+test('突破必须严格大于，触碰门槛不算突破',()=>{assert.equal(entrySignal(data({close30:99}),now).breakout,false);assert.equal(entrySignal(data({ema20:95}),now).trend.pass,false);});
+test('未来、过期、非收盘时刻及非正常时段不能放行',()=>{
+  for(const d of [data({signalAt:'2026-10-19T15:00:00Z'}),data({signalAt:'2026-10-19T14:00:00Z'}),data({signalAt:'2026-10-19T14:17:00Z'}),data({hourAt:'2026-10-19T15:30:00Z'}),data({hourAt:'2026-10-16T19:30:00Z'})])assert.equal(entrySignal(d,now).pass,false);
+  assert.equal(entrySignal(data(),'2026-10-18T14:35:00Z').pass,false);assert.equal(entrySignal(data(),'2026-10-19T15:00:00Z').fresh,false);
+});
+test('小时后见数据不能用于确认过去买点',()=>{const x=entrySignal(data({hourAt:'2026-10-19T15:00:00Z'}),'2026-10-19T15:05:00Z');assert.equal(x.pass,false);assert.match(x.reasons.join(' '),/晚于|过期/);});
+test('纽约夏令时切换与半日市正确',()=>{assert.equal(marketClock(now).minute,635);assert.equal(marketClock('2026-11-02T15:35:00Z').minute,635);assert.equal(marketClock('2026-11-27T16:00:00Z').half,true);assert.equal(marketClock('2026-11-27T16:00:00Z').entry,false);assert.equal(marketClock('2029-01-02T16:00:00Z').entry,false);});
+test('现金未知或为0不能开仓，资金上限不会用正数填补',()=>{const s=state();s.workbench.cash='';assert.equal(calculateWorkbench(s,'SOXL',data(),now).qty,0);s.workbench.cash=0;assert.equal(calculateWorkbench(s,'SOXL',data(),now).qty,0);s.workbench.cash=200;assert.equal(calculateWorkbench(s,'SOXL',data(),now).qty,2);});
+test('单只市值25%上限与整股取整独立于风险上限',()=>{const s=state(),d=data({atr:.1,low:99.95});const x=calculateWorkbench(s,'SOXL',d,now);assert.equal(x.referenceQty,75);assert.ok(x.qty*100<=7500);});
+test('买入冻结止损和实际R，保存不改输入状态',()=>{const s=state(),before=structuredClone(s),p=prepareDisciplineBuy(s,{symbol:'SOXL',price:100,qty:33,at:now,reason:'正常信号'},now);assert.deepEqual(s,before);assert.equal(p.check.pass,true);near(p.round.plan.stop,95.5);near(p.round.initialRisk,148.5);assert.equal(p.round.executionModel.mode,'atr-2r');validateState({...s,rounds:[p.round]});});
+test('同一标的已有仓位阻止重复入场，不被另开记录绕过',()=>{const s=state();buy(s);const x=calculateWorkbench(s,'SOXL',data(),now);assert.equal(x.qty,0);assert.match(x.reasons.join(' '),/已有持仓/);});
+test('缺失持仓估值阻止新增，更新后不释放浮盈对应风险',()=>{
+  const s=state();const b=buy(s);s.workbench.inputs.GDXU=data();let p=disciplinePortfolio(s,now);assert.equal(p.valid,false);
+  b.round.mark={price:109,at:now};p=disciplinePortfolio(s,now);assert.equal(p.valid,true);near(p.risk,148.5);near(p.value,3597);
+  const x=calculateWorkbench(s,'GDXU',data(),now);assert.equal(x.qty,33);
+});
+test('三笔风险与总市值共同上限，不要求平均每只一万美元',()=>{const s=state();for(const symbol of WATCHLIST)s.workbench.inputs[symbol]=data();for(const symbol of WATCHLIST){const p=buy(s,symbol);assert.equal(p.check.pass,true);p.round.mark={price:100,at:now};}const p=disciplinePortfolio(s,now);near(p.risk,445.5);near(p.value,9900);assert.equal(p.positions.length,3);assert.equal(calculateWorkbench(s,'BITX',data(),now).qty,0);});
+test('历史分类持仓仍占用资金，未知止损不能装作风险为零',()=>{const s=state();const b=buy(s);b.round.scope='history';b.round.mark={price:100,at:now};assert.equal(disciplinePortfolio(s,now).positions.length,1);b.round.plan.stop='';b.round.initialRisk=null;assert.equal(disciplinePortfolio(s,now).valid,false);});
+test('超过150风险的真实成交保留偏离，拒绝伪造为合规',()=>{const s=state(),p=buy(s,'SOXL',{qty:50});assert.equal(p.check.pass,false);assert.match(p.fill.violations.join(' '),/0.5%/);assert.equal(p.round.review.compliant,false);assert.equal(disciplineGuard(s,now).blocked,true);});
+test('新交易更正价格保留原S，重新冻结真实R，不降低止损',()=>{const s=state(),b=buy(s),p=prepareDisciplineFill(s,b.round.id,{editId:b.fill.id,at:now,qty:33,price:101,reason:'成交录入更正'},now);near(p.round.plan.stop,95.5);near(p.round.initialRisk,181.5);assert.equal(p.check.pass,false);assert.throws(()=>prepareDisciplineFill(s,b.round.id,{editId:b.fill.id,at:now,qty:33,price:95,reason:'错误买价'},now),/止损/);});
+test('+2R全部卖出正确，跳空可超过−1R，趋势退出不误标固定目标偏离',()=>{
+  let s=state(),b=buy(s),x=sell(s,b.round.id,109,{reasonCode:'target'});near(x.check.after.r,2);assert.equal(x.check.pass,true);
+  s=state();b=buy(s);x=sell(s,b.round.id,90);assert.ok(x.check.after.r<-1);
+  s=state();b=buy(s);x=sell(s,b.round.id,98,{reasonCode:'structure'});assert.equal(x.check.pass,true);
+});
+test('部分卖出及旧偏离不会借更正被清除',()=>{const s=state(),b=buy(s),x=sell(s,b.round.id,109,{qty:10,reasonCode:'target'});assert.equal(x.check.pass,false);const fixed=prepareDisciplineFill(s,b.round.id,{editId:x.fill.id,at:x.fill.at,qty:33,price:109,reasonCode:'target',reason:'更正实际整笔'},x.fill.at);assert.equal(fixed.check.pass,false);assert.match(fixed.fill.violations.join(' '),/部分/);});
+test('新结构交易与工作台数据可完整CSV和JSON无损往返，篡改S拒绝',()=>{const s=state();buy(s);assert.deepEqual(importBackupCSV(exportBackupCSV(s)),s);assert.deepEqual(validateState(JSON.parse(JSON.stringify(s))),s);const bad=structuredClone(s);bad.rounds[0].plan.stop=94;assert.throws(()=>validateState(bad),/快照/);});
+test('新旧规则共存保留固定比例交易原始快照与初始R',()=>{const s=state(),legacy=prepareExecutionBuy(s,{symbol:'AGQ',qty:10,price:100,at:now,reason:'旧版历史记录'},now).round;s.rounds.push(legacy);const original=structuredClone(legacy);buy(s);validateState(s);assert.deepEqual(s.rounds[0],original);assert.deepEqual(importBackupCSV(exportBackupCSV(s)),s);});
+function closedLoss(at,flat=false){const s=state(),p=prepareDisciplineBuy(s,{symbol:'SOXL',price:100,qty:10,at:now,reason:'隔离测试'},now);const r=p.round;r.fills[0].violations=[];r.fills[0].at=new Date(Date.parse(at)-60000).toISOString();r.fills.push({id:'exit-'+at,sequence:1,at,side:'sell',kind:'exit',qty:10,price:flat?100:95.5,fee:0,plannedPrice:null,targetPrice:null,reason:'测试平仓',reasonCode:'stop',trendConfirmed:false,violations:[]});return r;}
+test('连续亏损跨日累计，周五触发后休息完整周一，周二复盘后恢复',()=>{const s=state();s.rounds=[closedLoss('2026-10-22T18:00:00Z'),closedLoss('2026-10-23T18:00:00Z')];let x=disciplineGuard(s,'2026-10-26T18:00:00Z');assert.equal(x.blocked,true);assert.equal(x.resumeDay,'2026-10-27');x=disciplineGuard(s,'2026-10-27T15:00:00Z');assert.equal(x.rested,true);assert.equal(x.blocked,true);s.workbench.recoveries.push({at:'2026-10-27T14:00:00Z',notes:'已经复盘上一笔并明确下一笔信号风险和数量'});assert.equal(disciplineGuard(s,'2026-10-27T15:00:00Z').blocked,false);});
+test('零盈亏不清空亏损计数，生效前旧亏损不追溯触发新纪律',()=>{const s=state();s.rounds=[closedLoss('2026-10-20T18:00:00Z'),closedLoss('2026-10-21T18:00:00Z',true),closedLoss('2026-10-22T18:00:00Z')];assert.equal(disciplineGuard(s,'2026-10-22T19:00:00Z').blocked,true);s.workbench.activatedAt='2026-10-23T00:00:00Z';assert.equal(disciplineGuard(s,'2026-10-23T19:00:00Z').blocked,false);});
+test('感恩节和半日市不算完整休息日，先完整休息周一',()=>{assert.equal(nextTradingDay('2026-11-25',{full:true}),'2026-11-30');const s=state();s.rounds=[closedLoss('2026-11-24T18:00:00Z'),closedLoss('2026-11-25T18:00:00Z')];assert.equal(disciplineGuard(s,'2026-11-30T18:00:00Z').resumeDay,'2026-12-01');});
+test('手动报价过期不产生价格卖点，最新价触及才明确提示',()=>{const s=state(),b=buy(s);let x=positionDecision(b.round,data({current:90,currentAt:'2026-10-16T14:30:00Z'}),now);assert.equal(x.urgent,false);x=positionDecision(b.round,data({current:95,currentAt:now}),now);assert.equal(x.urgent,true);assert.match(x.text,/止损/);x=positionDecision(b.round,data({current:109,currentAt:now}),now);assert.match(x.text,/全额/);});
+test('备份合并保留当前输入且合并恢复复盘，冲突原子拒绝',()=>{const a=state(),b=state();b.workbench.inputs.SOXL.entry=101;b.workbench.recoveries.push({at:now,notes:'已复盘并重新确认交易信号与下一笔风险'});const m=mergeStates(a,b);assert.equal(m.workbench.inputs.SOXL.entry,100);assert.equal(m.workbench.recoveries.length,1);const c=structuredClone(m);c.workbench.recoveries[0].notes='同一时间但不同复盘内容需要人工核对';assert.throws(()=>mergeStates(m,c),/冲突/);});

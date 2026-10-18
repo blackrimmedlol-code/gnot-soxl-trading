@@ -89,7 +89,7 @@ test('已有 SOXL 数据与新标的数据安全合并，同 ID 异内容仍拒�
   const conflict=structuredClone(local);conflict.rounds[0].symbol='LABU';assert.throws(()=>mergeStates(local,conflict),/冲突/);
 });
 test('未授权主动标的及伪造草稿键拒绝，不扩大交易池',()=>{
-  for(const symbol of ['RAM','GDXU','toString','__proto__']){const s=state(make());s.rounds[0].symbol=symbol;assert.throws(()=>validateState(s));assert.throws(()=>selectDraft(defaultState(),symbol));}
+  for(const symbol of ['RAM','NVDA','toString','__proto__']){const s=state(make());s.rounds[0].symbol=symbol;assert.throws(()=>validateState(s));assert.throws(()=>selectDraft(defaultState(),symbol));}
 });
 test('旧存储键加载与新版刷新保留三标的，切换草稿不会丢失 SOXL 记录',async()=>{
   const map=new Map(),storage={getItem:k=>map.get(k)??null,setItem:(k,v)=>map.set(k,String(v))};

@@ -17,6 +17,8 @@ export function executionPrices(symbol,entry,profile=EXECUTION_PROFILES[symbol])
 }
 export const SYMBOLS = Object.freeze({
   SOXL: {name:'半导体', leverage:'3× DAILY', reference:'QQQ／SOXX', url:'https://www.direxion.com/product/daily-semiconductor-bull-bear-3x-etfs', note:'半导体每日三倍。SOXX 为观察参考，实际基准以发行方为准。'},
+  GDXU: {name:'金矿股', leverage:'3× DAILY · ETN', reference:'GDX／GDXJ', url:'https://www.bmoetn.com/ETN/GDXU.P/', note:'金矿股每日三倍 ETN，并非黄金现货；另有发行人信用风险。'},
+  BITX: {name:'比特币', leverage:'2× DAILY', reference:'BTC／比特币期货', url:'https://www.volatilityshares.com/bitx/', note:'每日两倍目标，通过比特币期货取得敞口，非直接持有比特币。'},
   AGQ: {name:'白银', leverage:'2× DAILY', reference:'白银期货／SLV', url:'https://www.proshares.com/our-etfs/leveraged-and-inverse/agq', note:'白银期货指数每日两倍。SLV 仅作观察参考；期货展期、隔夜行情与现货可能产生差异。'},
   LABU: {name:'生物科技', leverage:'3× DAILY', reference:'XBI', url:'https://www.direxion.com/product/daily-sp-biotech-bull-bear-3x-etfs', note:'生物科技指数每日三倍。用 XBI 观察板块，评估研发、审批、融资与隔夜风险。'},
   MSTU: {name:'MSTR', leverage:'2× DAILY', reference:'MSTR／BTC', url:'https://www.rexshares.com/mstu/', note:'MSTR 单只股票每日两倍，并非比特币指数。MSTR 结构需独立确认，另评估 BTC 全天／周末行情及公司事件。'}
@@ -42,7 +44,7 @@ export function checksFor(symbol='SOXL') {
   return CHECKS.map(([key,text])=>[key,overrides[symbol]?.[key]??text]);
 }
 export function selectDraft(state,symbol) {
-  if(!Object.hasOwn(SYMBOLS,symbol)) throw Error('只支持 SOXL、AGQ、LABU、MSTU。');
+  if(!Object.hasOwn(SYMBOLS,symbol)) throw Error('不支持该标的。新纪律交易池为 SOXL、GDXU、BITX；旧标的仅保留历史兼容。');
   const next=structuredClone(state),previous=next.draft.symbol??'SOXL';
   next.symbolDrafts??={};next.symbolDrafts[previous]=structuredClone(next.draft);
   next.draft=structuredClone(next.symbolDrafts[symbol]??defaultState().draft);
@@ -259,7 +261,7 @@ const stamp=x=>typeof x==='string'&&/T.*(?:Z|[+-]\d\d:\d\d)$/.test(x)&&finite(Da
 function assert(c,message) {if(!c)throw Error(message);}
 export function validateState(input) {
   assert(obj(input)&&input.schemaVersion===1,'不支持的备份版本。请使用 GNOT V1 JSON／备份 CSV。');
-  assert(obj(input.settings)&&input.settings.initialEquity===25000,'V1 初始权益必须保持 25,000 USD。');
+  assert(obj(input.settings)&&positive(input.settings.initialEquity),'初始权益必须大于0。');
   assert(/^\d{4}-\d{2}-\d{2}$/.test(input.settings.startDate)&&finite(Date.parse(input.settings.startDate)),'统计起始日期无效。');
   assert(Array.isArray(input.rounds)&&input.rounds.length<=5000,'交易轮数据无效或过大。');
   assert(Array.isArray(input.snapshots)&&input.snapshots.length<=10000,'权益快照数据无效。');
@@ -268,13 +270,23 @@ export function validateState(input) {
   for(const r of input.rounds) {
     unique(r.id);assert(['active','history'].includes(r.scope),'交易分类无效。');
     assert(r.entrySource===undefined||['plan','actual'].includes(r.entrySource),'交易记录来源无效。');
-    assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易只能记录 SOXL、AGQ、LABU、MSTU。');
+    assert(string(r.symbol,20)&&r.symbol.length>0&&(r.scope!=='active'||Object.hasOwn(SYMBOLS,r.symbol)),'主动交易标的不受支持；当前SOXL、GDXU、BITX，旧标的保留兼容。');
     assert(['risk-on','neutral','risk-off'].includes(r.environment)&&['support','trend'].includes(r.strategy),'市场环境或入场策略无效。');
     assert(obj(r.plan)&&obj(r.checks)&&obj(r.review),'交易计划／检查／复盘信息缺失。');
     if(r.executionModel!==undefined){
-      const m=r.executionModel,exit=executionPrices(r.symbol,r.plan.entry,m);
-      assert(obj(m)&&m.mode==='fixed-2r'&&m.targetR===2&&string(m.asOf,20)&&/^\d{4}-\d{2}-\d{2}$/.test(m.asOf)&&finite(Date.parse(m.asOf))&&exit,'执行规则快照无效。');
-      assert(Math.abs(Number(r.plan.stop)-exit.stop)<EPS&&r.plan.targetMode==='r'&&Number(r.plan.targetR)===2,'冻结的退出价格与参考参数快照不一致。');
+      const m=r.executionModel;
+      assert(obj(m)&&['fixed-2r','atr-2r'].includes(m.mode)&&m.targetR===2&&string(m.asOf,20)&&/^\d{4}-\d{2}-\d{2}$/.test(m.asOf)&&finite(Date.parse(m.asOf)),'执行规则快照无效。');
+      if(m.mode==='fixed-2r'){
+        const exit=executionPrices(r.symbol,r.plan.entry,m);
+        assert(exit&&Math.abs(Number(r.plan.stop)-exit.stop)<EPS,'冻结的退出价格与参考参数快照不一致。');
+      }else{
+        assert(positive(m.atr)&&positive(m.low)&&positive(m.plannedEntry)&&positive(m.stop),'结构／ATR 快照缺失。');
+        const stop=Number(Math.min(m.low-.1*m.atr,m.plannedEntry-1.5*m.atr).toFixed(8));
+        assert(Math.abs(stop-m.stop)<EPS&&Math.abs(Number(r.plan.stop)-m.stop)<EPS,'结构／ATR 止损与入场快照不一致。');
+        assert(['SOXL','GDXU','BITX'].includes(r.symbol),'新纪律仅支持 SOXL、GDXU、BITX。');
+        assert(Array.isArray(r.stopEvents)&&r.stopEvents.length===0,'新纪律不移动初始止损。');
+      }
+      assert(r.plan.targetMode==='r'&&Number(r.plan.targetR)===2,'冻结的目标必须保持 +2R。');
     }
     const p=calculatePlan(r.plan);
     if(r.plan.quantity!==undefined){const value=tradeAmount(r.plan.quantity,r.plan.entry);assert(value!==null&&Math.abs(n(r.plan.amount)-value)<EPS,'计划金额与记录股数、价格不一致。');}
@@ -327,13 +339,23 @@ export function validateState(input) {
     assert(obj(input.symbolDrafts),'分标的草稿无效。');
     for(const [symbol,d] of Object.entries(input.symbolDrafts)){assert(Object.hasOwn(SYMBOLS,symbol)&&(d.symbol??'SOXL')===symbol,'分标的草稿与标的不一致。');validateDraft(d);}
   }
+  if(input.workbench!==undefined){
+    const w=input.workbench;assert(obj(w)&&w.version===1&&positive(n(w.equity))&&(w.cash===''||(finite(n(w.cash))&&n(w.cash)>=0))&&obj(w.inputs)&&Array.isArray(w.recoveries)&&w.recoveries.length<=1000,'纪律工作台数据无效。');
+    assert(w.activatedAt===undefined||stamp(w.activatedAt),'纪律生效时间无效。');
+    for(const [symbol,data] of Object.entries(w.inputs)){
+      assert(['SOXL','GDXU','BITX'].includes(symbol)&&obj(data),'纪律输入标的无效。');
+      for(const key of ['entry','atr','low','high','close30','close1h','ema20','ema50','current'])assert(data[key]===undefined||data[key]===''||(finite(n(data[key]))&&n(data[key])>0),'纪律行情输入含非法数值。');
+      for(const key of ['signalAt','hourAt','currentAt'])assert(data[key]===undefined||data[key]===''||stamp(data[key]),'纪律行情时间无效。');
+    }
+    for(const r of w.recoveries)assert(stamp(r.at)&&string(r.notes)&&r.notes.trim().length>=10,'恢复交易需填写至少10字复盘。');
+  }
   assert(obj(input.meta)&&Number.isInteger(input.revision)&&input.revision>=0,'备份元数据无效。');
   return structuredClone(input);
 }
 export function newRound(state, {scope='active',symbol=state.draft.symbol??'SOXL',title=''}={}) {
   const d=state.draft, c=calculatePlan(d.plan);
   symbol=symbol.toUpperCase();
-  if(scope==='active'&&!Object.hasOwn(SYMBOLS,symbol))throw Error('只支持 SOXL、AGQ、LABU、MSTU。');
+  if(scope==='active'&&!Object.hasOwn(SYMBOLS,symbol))throw Error('不支持该标的。新纪律交易池为 SOXL、GDXU、BITX；旧标的仅保留历史兼容。');
   if(!c.valid && (scope==='active'||!positive(n(d.plan.entry))||!positive(n(d.plan.amount))||(d.plan.stop!==''&&d.plan.stop!==null))) throw Error(c.errors.join(' '));
   const combined=scope==='active'?calculateDraft(state):c;
   const plan=structuredClone(d.plan);
@@ -453,12 +475,18 @@ export function mergeStates(local, imported) {
       if(!map.has(x.id)){result[key].push(structuredClone(x));map.set(x.id,x);}
     }
   }
+  if(imported.workbench&&!result.workbench)result.workbench=structuredClone(imported.workbench);
+  else if(imported.workbench&&result.workbench){
+    const map=new Map(result.workbench.recoveries.map(r=>[r.at,r]));
+    for(const r of imported.workbench.recoveries){if(map.has(r.at)&&map.get(r.at).notes!==r.notes)throw Error('恢复复盘记录冲突。');if(!map.has(r.at)){result.workbench.recoveries.push(structuredClone(r));map.set(r.at,r);}}
+  }
   return validateState(result);
 }
 const csvCell=x=>'"'+String(x??'').replaceAll('"','""')+'"';
 export function exportBackupCSV(state) {
   validateState(state);
   const rows=[['record_type','id','payload_json'],['settings','settings',JSON.stringify(state.settings)],['draft','draft',JSON.stringify(state.draft)],['meta','meta',JSON.stringify({schemaVersion:1,revision:state.revision,meta:state.meta})]];
+  if(state.workbench!==undefined)rows.push(['workbench','workbench',JSON.stringify(state.workbench)]);
   if(state.symbolDrafts!==undefined)rows.push(['symbolDrafts','symbolDrafts',JSON.stringify(state.symbolDrafts)]);
   for(const key of ['rounds','snapshots','drawdownReviews']) for(const row of state[key])rows.push([key,row.id,JSON.stringify(row)]);
   return '\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
@@ -482,7 +510,7 @@ export function importBackupCSV(text) {
   const state=defaultState(), singles=new Set();
   for(const row of rows){
     assert(row.length===3,'备份 CSV 列数错误。');const [kind,id,payload]=row;const data=JSON.parse(payload);
-    if(['settings','draft','meta','symbolDrafts'].includes(kind)){
+    if(['settings','draft','meta','symbolDrafts','workbench'].includes(kind)){
       assert(!singles.has(kind),'备份 CSV 重复元数据。');singles.add(kind);
       if(kind==='meta'){assert(data.schemaVersion===1,'不支持的 CSV 版本。');state.revision=data.revision;state.meta=data.meta;}else state[kind]=data;
     }else{assert(['rounds','snapshots','drawdownReviews'].includes(kind)&&data.id===id,'备份 CSV 类型或 ID 错误。');state[kind].push(data);}
