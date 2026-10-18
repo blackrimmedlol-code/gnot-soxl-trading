@@ -1,3 +1,4 @@
+import {TREND_FEED_URL,acceptTrendFeed,effectiveMarketInput} from './trend-feed.js';
 import {ensureRisk,accountRisk,activateRisk,addRiskClose,correctRiskClose,revokeInvalidTransition,transitionRisk,weeklyReview,executionReview,closingISO} from './risk.js';
 import {activationForm,closeForm,recoveryForm,journalTable,referenceHTML} from './risk-ui.js';
 import {marketClock,nextTradingDay} from './market.js';
@@ -50,7 +51,7 @@ function hydrate(){
   readDraft();renderSymbols();
 }
 function readDraft(){
-  if(!state)return;const f=$('#buy-form'),d=state.draft,exit=priceLevels(d.executionSnapshot??state.workbench?.inputs?.[d.symbol]??{});
+  if(!state)return;const f=$('#buy-form'),d=state.draft,exit=priceLevels(d.executionSnapshot??effectiveMarketInput(state,d.symbol));
   d.quantity=f.elements.qty.value;d.sizingMode='shares';d.reason=f.elements.reason.value;
   Object.assign(d.plan,{entry:f.elements.price.value,quantity:d.quantity,amount:tradeAmount(d.quantity,f.elements.price.value)??'',equity:f.elements.equity.value,stop:exit.valid?exit.stop:'',targetMode:'r',targetR:2,targetPrice:'',costs:0,gapPct:0});
 }
@@ -58,7 +59,7 @@ function scheduleDraft(){if(!state||storageError)return;readDraft();renderBuy();
 function renderSymbols(){const symbol=state?.draft.symbol??'SOXL';$$('[data-symbol]').forEach(b=>{b.classList.toggle('selected',b.dataset.symbol===symbol);b.setAttribute('aria-pressed',String(b.dataset.symbol===symbol));});$('#active-symbol-name').textContent=symbol;$('#active-symbol-leverage').textContent=SYMBOLS[symbol].leverage;$('#reference-symbol').textContent=symbol;workbench?.render(symbol);}
 function buyInput(){const v=values($('#buy-form'));return {...v,symbol:state.draft.symbol,snapshot:state.draft.executionSnapshot,at:iso(v.at)};}
 function renderBuy(){
-  if(!state)return;const symbol=state.draft.symbol,f=$('#buy-form'),levels=priceLevels(state.draft.executionSnapshot??state.workbench?.inputs?.[symbol]??{}),p=Number(f.elements.price.value),qty=Number(f.elements.qty.value),amount=tradeAmount(qty,p),stop=levels.valid?levels.stop:null;
+  if(!state)return;const symbol=state.draft.symbol,f=$('#buy-form'),levels=priceLevels(state.draft.executionSnapshot??effectiveMarketInput(state,symbol)),p=Number(f.elements.price.value),qty=Number(f.elements.qty.value),amount=tradeAmount(qty,p),stop=levels.valid?levels.stop:null;
   const risk=stop!==null&&p>stop&&amount!==null?qty*(p-stop):null,target=stop!==null&&p>stop?p+2*(p-stop):null;
   $('#exit-reference').innerHTML=`<div class="exit-price-card"><span>保存时冻结初始止损</span><strong>${price(stop)}</strong></div><div class="exit-price-card"><span>按实际买价计算 +2R</span><strong>${price(target)}</strong></div>`;
   const calc=calculateWorkbench(state,symbol),e=Number(f.elements.equity.value);
@@ -72,7 +73,7 @@ function renderGuard(){
   const g=disciplineGuard(state);$('#guard-panel').innerHTML=g.blocked?`<div class="guard-banner danger"><div><strong>暂停新开仓</strong><p>${g.reasons.map(esc).join('<br>')} 已有持仓继续执行退出安排。</p></div></div>`:'';
 }
 function card(r){
-  const a=accounting(r),c=calculatePlan(r.plan),open=a.qty>0,decision=r.executionModel?.mode==='atr-2r'?positionDecision(r,state.workbench?.inputs?.[r.symbol]):null;
+  const a=accounting(r),c=calculatePlan(r.plan),open=a.qty>0,decision=r.executionModel?.mode==='atr-2r'?positionDecision(r,effectiveMarketInput(state,r.symbol)):null;
   return `<article class="round-card"><div><span class="tag">${r.scope==='history'?'旧持仓历史':open?'持仓中':'已退出'}</span><h3>${esc(r.symbol)}</h3><p>${esc(date(a.entryAt??r.createdAt))} · ${r.fills.length} 笔成交</p>${r.scope==='active'&&!r.executionModel?'<span class="tag">旧退出规则保留</span>':''}</div><div class="round-values"><div><span>剩余股数</span><strong>${a.qty}</strong></div><div><span>成本均价</span><strong>${price(a.avg)}</strong></div><div><span>已实现盈亏 / R</span><strong class="${cls(a.realized)}">${money(a.realized)}</strong><small>${rval(a.r)}</small></div></div><div class="journal-actions">${open?`<button class="primary-button" data-sell="${esc(r.id)}">记录卖出</button>`:''}<button class="quiet-button" data-open-record="${esc(r.id)}">详情／复盘 ↗</button></div>${open?`<div class="position-exits">${decision?`<span class="position-decision ${decision.urgent?'negative':''}">${esc(decision.text)}</span>`:''}<span>当前止损参考 <strong>${price(Number.isFinite(effectiveStop(r))?effectiveStop(r):null)}</strong></span><span>退出参考 <strong>${price(c.valid?c.target:null)}</strong></span><span>未实现盈亏 <strong class="${cls(a.unrealized)}">${money(a.unrealized)}</strong></span></div>`:''}</article>`;
 }
 function renderHome(){const rs=records(),s=statistics({...state,rounds:state.rounds.filter(r=>r.executionModel?.ruleVersion==='1.1')}),risk=accountRisk(state);$('#open-positions').innerHTML=rs.filter(r=>r.scope==='active'&&accounting(r).qty>0).map(card).join('')||empty('还没有主动持仓','登记真实买入后，在这里查看退出参考并记录卖出。');$('#home-stats').innerHTML=[['v1.1已实现盈亏',money(s.realized)],['已退出交易',String(s.total)],['胜率',pct(s.winRate)],['v1.1最大收盘回撤',pct(risk.historyDD)]].map(([k,v])=>`<div><span>${k}</span><strong>${v}</strong></div>`).join('');$('#recent-records').innerHTML=rs.slice().sort((a,b)=>Date.parse(b.fills.at(-1).at)-Date.parse(a.fills.at(-1).at)).slice(0,3).map(card).join('')||empty('还没有成交记录','不填入示例盈利，先记录你的真实成交。');}
@@ -116,8 +117,9 @@ async function exportData(mode='json'){if(!state)throw Error('请恢复本机数
 async function restore(data){const raw=localStorage.getItem(STORAGE_KEY);if(!state||storageError){state=await recoverStorage(data,raw);storageError=null;$('#storage-alert').hidden=true;}else await commit(s=>Object.assign(s,structuredClone(data)));hydrate();renderAll();status('已恢复至本机');}
 async function importFile(file){if(!file)return;if(file.size>10*1024*1024)throw Error('备份超过 10 MB。');const raw=await file.text();pendingImport=file.name.toLowerCase().endsWith('.csv')?importBackupCSV(raw):validateState(JSON.parse(raw));$('#import-preview').innerHTML=`<div class="calc-status"><strong>文件校验通过</strong><p>${pendingImport.rounds.filter(r=>r.fills.length).length} 笔成交记录，当前数据尚未改变。</p></div><button id="confirm-import" class="primary-button">按所选方式导入</button>`;}
 document.addEventListener('input',e=>{if(e.target.closest('#buy-form')){if(e.target.name==='equity'&&Number(e.target.value)>0)ensureWorkbench(state).equity=Number(e.target.value);scheduleDraft();}if(e.target.closest('#fill-form'))updateFillPreview();});
-document.addEventListener('change',e=>{if(e.target.closest('#buy-form')){if(e.target.name==='equity'&&Number(e.target.value)>0)ensureWorkbench(state).equity=Number(e.target.value);scheduleDraft();}if(e.target.closest('#fill-form'))updateFillPreview();if(e.target.id==='journal-symbol'){journalSymbol=e.target.value;renderJournal();}if(e.target.id==='performance-symbol'){performanceSymbol=e.target.value;renderPerformance();}if(e.target.id==='performance-version'){performanceVersion=e.target.value;renderPerformance();}if(e.target.id==='import-file')importFile(e.target.files[0]).catch(x=>{pendingImport=null;$('#import-preview').textContent=clean(x.message);});});
+document.addEventListener('change',e=>{if(e.target.closest('#buy-form')){if(e.target.name==='equity'&&Number(e.target.value)>0)ensureWorkbench(state).equity=Number(e.target.value);scheduleDraft();}if(e.target.closest('#fill-form'))updateFillPreview();if(e.target.id==='journal-symbol'){journalSymbol=e.target.value;renderJournal();}if(e.target.id==='performance-symbol'){performanceSymbol=e.target.value;renderPerformance();}if(e.target.id==='trend-source-mode'){ensureWorkbench(state).trendModes??={};state.workbench.trendModes[state.draft.symbol]=e.target.value;scheduleDraft();renderAll();}if(e.target.id==='performance-version'){performanceVersion=e.target.value;renderPerformance();}if(e.target.id==='import-file')importFile(e.target.files[0]).catch(x=>{pendingImport=null;$('#import-preview').textContent=clean(x.message);});});
 document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;try{
+  if(b.id==='refresh-trend-feed'){await syncTrendFeed(true);return;}
   if(b.id==='confirm-equity-day'){await commit(s=>{const w=ensureWorkbench(s);if(!(Number(w.equity)>0)||w.cash===''||!Number.isFinite(Number(w.cash)))throw Error('请先填写真实净值与可用现金。');w.equityDay=marketClock().day;});toast('已确认该美东日期的净值与现金。');return;}
   if(b.dataset.editRiskClose){small('更正收盘净值',closeForm(state,new Date().toISOString(),b.dataset.editRiskClose));return;}
   if(b.dataset.revokeRisk){small('重新复核恢复操作',`<form id="risk-revoke-form" data-id="${esc(b.dataset.revokeRisk)}"><p>更正数据使此前恢复条件不再成立。撤回该恢复操作后，系统重新按完整净值核对；原操作及撤回原因继续保留。</p><label class="full-field">数据更正原因<textarea name="notes" minlength="10" required></textarea></label><button type="submit" class="primary-button">撤回失效恢复并重新核对</button></form>`);return;}
@@ -162,8 +164,26 @@ document.addEventListener('submit',async e=>{
 window.addEventListener('hashchange',()=>{route();window.scrollTo(0,0);});
 window.addEventListener('storage',e=>{if(e.key===STORAGE_KEY)showStorageError('另一标签页更新了记录，请重新载入，避免覆盖。');});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&draftTimer&&state&&!storageError){readDraft();commit(()=>{},{backup:false,render:false}).catch(e=>toast(e.message,true));}});
-workbench=mountWorkbench({getState:()=>state,onEdit:()=>scheduleDraft(),onUse:calc=>{state.draft.executionSnapshot={...structuredClone(state.workbench.inputs[calc.symbol]??{}),...(calc.ready?{authorizedQty:calc.qty}:{})};const f=$('#buy-form');f.elements.price.value=calc.levels.entry;f.elements.qty.value=calc.ready?calc.qty:calc.referenceQty;f.elements.equity.value=calc.equity;f.elements.at.value=nowInput();$('#actual-recording').open=true;readDraft();renderBuy();$('#actual-recording').scrollIntoView({behavior:'smooth',block:'start'});scheduleDraft();},onRecovery:()=>small('连续亏损／违纪复盘',recoveryForm('behavior',state))});
+workbench=mountWorkbench({getState:()=>state,onEdit:()=>scheduleDraft(),onUse:calc=>{state.draft.executionSnapshot={...structuredClone(calc.inputSnapshot??{}),...(calc.ready?{authorizedQty:calc.qty}:{})};const f=$('#buy-form');f.elements.price.value=calc.levels.entry;f.elements.qty.value=calc.ready?calc.qty:calc.referenceQty;f.elements.equity.value=calc.equity;f.elements.at.value=nowInput();$('#actual-recording').open=true;readDraft();renderBuy();$('#actual-recording').scrollIntoView({behavior:'smooth',block:'start'});scheduleDraft();},onRecovery:()=>small('连续亏损／违纪复盘',recoveryForm('behavior',state))});
 setInterval(()=>{if(state){workbench.render(state.draft.symbol);renderGuard();renderHome();}},30000);
 hydrate();route();renderAll();if(storageError){showStorageError(storageError);location.hash='#data';}else status(state.meta.updatedAt?'已保存至本机':'本机保存 · 尚无成交');
 
 fetch(new URL('./TRADING_RULES.md',import.meta.url)).then(r=>{if(!r.ok)throw Error('规则读取失败');return r.text();}).then(md=>{$('#rule-references').innerHTML=referenceHTML(md);}).catch(()=>{$('#rule-references').innerHTML='<p>依据暂时未载入，请下载完整纪律MD阅读。</p>';});
+
+let trendFetchBusy=false;
+async function syncTrendFeed(manual=false){
+  if(trendFetchBusy||!state||storageError)return;trendFetchBusy=true;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+  try{
+    const response=await fetch(TREND_FEED_URL+'?t='+Date.now(),{cache:'no-store',signal:controller.signal});
+    if(!response.ok)throw Error('HTTP '+response.status);
+    const changed=acceptTrendFeed(state,await response.json());delete state.workbench.trendFetchError;
+    if(changed){await commit(()=>{},{backup:false,render:false});readDraft();renderAll();}
+    else workbench?.render(state.draft.symbol);
+    if(manual)toast('已读取最新已发布快照；这不会触发新的行情任务。');
+  }catch(error){state.workbench.trendFetchError=error.name==='AbortError'?'读取超时':error.message;workbench?.render(state.draft.symbol);if(manual)toast('趋势同步失败：'+state.workbench.trendFetchError,true);}
+  finally{clearTimeout(timer);trendFetchBusy=false;}
+}
+syncTrendFeed();
+setInterval(()=>{if(document.visibilityState!=='hidden')syncTrendFeed();},60000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncTrendFeed();});

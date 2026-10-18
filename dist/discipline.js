@@ -1,3 +1,4 @@
+import {effectiveMarketInput,currentAutoHour} from './trend-feed.js';
 // 2026-10-18 strategy. Pure calculations; never retrieves prices or routes orders.
 import {accounting, positionRisk, newRound, uid, usDay, validateState} from './core.js';
 
@@ -24,6 +25,7 @@ export function priceLevels(input){
 }
 const stampOk=(v,now)=>typeof v==='string'&&Number.isFinite(Date.parse(v))&&Date.parse(v)<=Date.parse(now);
 export function trendState(input={},now=new Date().toISOString()){
+  if(input.trendOrigin==='auto'&&!currentAutoHour(input.hourAt,now))return {known:false,pass:false,reason:'自动小时快照已过期或当前休市，更新或切换手动核对'};
   if(!['close1h','ema20','ema50'].every(k=>pos(input[k])))return {known:false,pass:false,reason:'待填小时趋势数据'};
   if(!stampOk(input.hourAt,now))return {known:false,pass:false,reason:'小时K线收盘时间未确认或在未来'};
   const t=marketClock(input.hourAt),n=marketClock(now),age=Date.parse(now)-Date.parse(input.hourAt);
@@ -44,6 +46,7 @@ export function entrySignal(input={},now=new Date().toISOString()){
   if(!signalTime)reasons.push('信号须为10:30–15:00 ET的已收盘30分钟K线');else if(!fresh)reasons.push('30分钟信号已过期，等待新信号');
   if(!clock.entry)reasons.push('当前不在规则开仓窗口');
   if(stampOk(input.hourAt,now)&&signalTime&&Date.parse(input.hourAt)>Date.parse(input.signalAt))reasons.push('小时数据晚于买入信号，不能使用后来的数据确认过去买点');
+  if(input.trendOrigin==='auto'&&Number.isFinite(Date.parse(input.trendGeneratedAt))&&Date.parse(input.trendGeneratedAt)>Date.parse(now))reasons.push('自动快照生成晚于本笔时刻，不能证明事前已核对');
   return {pass:reasons.length===0,trend,breakout,fresh,signalTime,clock,reasons};
 }
 export function disciplinePortfolio(state,now=new Date().toISOString(),excludeId=null){
@@ -69,9 +72,10 @@ export function disciplinePortfolio(state,now=new Date().toISOString(),excludeId
   }
   return {risk,value,unknown:[...new Set(unknown)],valid:unknown.length===0,positions};
 }
-export function calculateWorkbench(state,symbol,input=state.workbench?.inputs?.[symbol]??{},now=new Date().toISOString(),excludeId=null){
+export function calculateWorkbench(state,symbol,input=undefined,now=new Date().toISOString(),excludeId=null){
+  input??=effectiveMarketInput(state,symbol,now);
   const w=state.workbench??{equity:30000,cash:'',inputs:{}},equity=num(w.equity),cash=num(w.cash),levels=priceLevels(input),signal=entrySignal(input,now),guard=disciplineGuard(state,now),portfolio=disciplinePortfolio(state,now,excludeId);
-  const trends=WATCHLIST.map(s=>({symbol:s,...trendState(s===symbol?input:w.inputs[s],now)})),qualified=trends.filter(x=>x.known&&x.pass).length,unknown=trends.filter(x=>!x.known).length;
+  const trends=WATCHLIST.map(s=>({symbol:s,...trendState(s===symbol?input:effectiveMarketInput(state,s,now),now)})),qualified=trends.filter(x=>x.known&&x.pass).length,unknown=trends.filter(x=>!x.known).length;
   const account=accountRisk(state,now),cap=[0,.25,.5,.6][qualified],singleBudget=equity*.015*(guard.blocked?0:account.k),totalBudget=equity*.03*(guard.blocked?0:account.k);
   let referenceQty=null,qty=0,capacityQty=0;const limits=[];
   const reasons=[...signal.reasons,...guard.reasons,...account.reasons];
@@ -94,10 +98,10 @@ export function calculateWorkbench(state,symbol,input=state.workbench?.inputs?.[
   const chosen=input.requestedQty===''||input.requestedQty==null?capacityQty:Number(input.requestedQty);
   if(!Number.isSafeInteger(chosen)||chosen<1||chosen>capacityQty)reasons.push('本次股数须为允许上限内的正整股数');
   if(!reasons.length)qty=chosen;
-  return {symbol,levels,signal,guard,account,portfolio,equity,cash,qualified,unknown,trends,cap,singleBudget,totalBudget,referenceQty,capacityQty,limits,limiting:limits.length?limits.filter(x=>Math.floor(x.qty+EPS)===Math.min(...limits.map(y=>Math.floor(y.qty+EPS)))).map(x=>x.name).join('、'):'资料待核对',qty,ready:reasons.length===0,reasons:[...new Set(reasons)]};
+  return {symbol,inputSnapshot:structuredClone(input),levels,signal,guard,account,portfolio,equity,cash,qualified,unknown,trends,cap,singleBudget,totalBudget,referenceQty,capacityQty,limits,limiting:limits.length?limits.filter(x=>Math.floor(x.qty+EPS)===Math.min(...limits.map(y=>Math.floor(y.qty+EPS)))).map(x=>x.name).join('、'):'资料待核对',qty,ready:reasons.length===0,reasons:[...new Set(reasons)]};
 }
 export function prepareDisciplineBuy(state,input,now=new Date().toISOString()){
-  const symbol=input.symbol,raw=structuredClone(input.snapshot??state.workbench?.inputs?.[symbol]??{});
+  const symbol=input.symbol,raw=structuredClone(input.snapshot??effectiveMarketInput(state,symbol,input.at));
   if(!WATCHLIST.includes(symbol))throw Error('新纪律只支持 SOXL、GDXU、BITX。');
   if(!Number.isFinite(Date.parse(input.at))||Date.parse(input.at)>Date.parse(now)+60000)throw Error('成交时间无效或在未来。');
   if(!input.reason?.trim())throw Error('请填写一句话买入理由。');

@@ -1,8 +1,8 @@
 {
   "name": "gnot-soxl-trading",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "private": true,
   "type": "module",
   "description": "SOXL、GDXU、BITX 纪律计算与执行复盘，V3.1",
-  "scripts": {"test": "node --test tests/*.test.mjs", "check": "node --check dist/app.js && node --check dist/core.js && node --check dist/storage.js && node --check dist/discipline.js && node --check dist/workbench-ui.js && node --check dist/risk.js && node --check dist/risk-ui.js && node --check dist/market.js && node --check scripts/package-pages.mjs", "build:pages": "node scripts/package-pages.mjs"}
+  "scripts": {"test": "node --test tests/*.test.mjs", "check": "node --check dist/app.js && node --check dist/core.js && node --check dist/storage.js && node --check dist/discipline.js && node --check dist/workbench-ui.js && node --check dist/risk.js && node --check dist/risk-ui.js && node --check dist/market.js && node --check dist/trend-feed.js && node --check scripts/package-pages.mjs", "build:pages": "node scripts/package-pages.mjs"}
 }

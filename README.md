@@ -1,4 +1,4 @@
-# GNOT · 交易工作台 V3.1
+# GNOT · 交易工作台 V3.2
 
 [线上工作台](https://blackrimmedlol-code.github.io/gnot-soxl-trading/#workspace)
 
@@ -54,3 +54,11 @@ npm run build:pages
 ```
 
 `main`推送由GitHub Actions检查、测试、打包、部署原GitHub Pages；所有JS/CSS与模块引用使用统一内容摘要避开旧缓存。真实浏览器验收情况见 `docs/ACCEPTANCE.md`。
+
+## 三标的自动小时快照
+
+工作台从原策略台us-market-dashboard的`trading-trends.json`读取SOXL/GDXU/BITX已收盘1小时趋势及Wilder ATR。保持原四次任务；浏览器可见时每分钟只检查已发布文件，手动“同步最新快照”也不触发新任务或模型。
+
+新用户默认自动模式，旧版已填完整小时数据默认保留手动模式。顶部可切换；原手动输入保留。自动模式提供小时收盘价、EMA20、EMA50、ATR和真实K线收盘时间；买价、结构低点、30分钟突破、最新报价、现金及账户风险仍独立核对。自动数据过期、缺失或休市只作参考，不放行新开；新小时完成后旧小时快照失效。已保存交易的初始止损、目标、R和预算不随同步改写。
+
+来源为Yahoo产品自身60m正式盘OHLC，连续250根预热；EMA采用SMA种子，ATR采用Wilder14，尾盘缩短的提供方小时K线纳入并标记。图表软件口径不同可切换手动核对。来源失败显示不可用，不能以公共快照推测用户账户或自动交易。

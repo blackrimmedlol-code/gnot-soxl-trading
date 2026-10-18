@@ -1,4 +1,5 @@
-// Pure, dependency-free financial functions. No market data or order routing.
+// Pure financial functions; shared snapshot validation. No requests or order routing.
+import {validateTrendFeed} from './trend-feed.js';
 export const SCHEMA_VERSION = 1;
 export const RULES = Object.freeze({riskPct: .01, initialEquity: 25000, initialAmount: 5000, minNetRR: 1.5, pauseDD: .05, haltDD: .10});
 export const EXECUTION_PROFILES=Object.freeze({
@@ -351,6 +352,9 @@ export function validateState(input) {
   if(input.workbench!==undefined){
     const w=input.workbench;assert(obj(w)&&w.version===1&&positive(n(w.equity))&&(w.cash===''||(finite(n(w.cash))&&n(w.cash)>=0))&&obj(w.inputs)&&Array.isArray(w.recoveries)&&w.recoveries.length<=1000,'纪律工作台数据无效。');
     assert(w.activatedAt===undefined||stamp(w.activatedAt),'纪律生效时间无效。');
+    if(w.trendFeed!==undefined)validateTrendFeed(w.trendFeed);
+    if(w.trendModes!==undefined)assert(obj(w.trendModes)&&Object.entries(w.trendModes).every(([s,v])=>['SOXL','GDXU','BITX'].includes(s)&&['auto','manual'].includes(v)),'趋势数据来源设置无效。');
+    assert(w.trendFetchError===undefined||string(w.trendFetchError,1000),'趋势读取状态无效。');
     assert(w.equityDay===undefined||(/^\d{4}-\d{2}-\d{2}$/.test(w.equityDay)&&finite(Date.parse(w.equityDay))),'当日净值确认日期无效。');
     for(const [symbol,data] of Object.entries(w.inputs)){
       assert(['SOXL','GDXU','BITX'].includes(symbol)&&obj(data),'纪律输入标的无效。');
@@ -498,6 +502,7 @@ export function mergeStates(local, imported) {
     const map=new Map(result.workbench.recoveries.map(r=>[r.at,r]));
     for(const r of imported.workbench.recoveries){if(map.has(r.at)&&map.get(r.at).notes!==r.notes)throw Error('恢复复盘记录冲突。');if(!map.has(r.at)){result.workbench.recoveries.push(structuredClone(r));map.set(r.at,r);}}
     const a=result.workbench.risk,b=imported.workbench.risk;
+    if(imported.workbench.trendFeed&&(!result.workbench.trendFeed||Date.parse(imported.workbench.trendFeed.generatedAt)>Date.parse(result.workbench.trendFeed.generatedAt)))result.workbench.trendFeed=structuredClone(imported.workbench.trendFeed);
     if(b&&!a)result.workbench.risk=structuredClone(b);
     else if(a&&b){
       if(a.baseline&&b.baseline&&JSON.stringify(a.baseline)!==JSON.stringify(b.baseline))throw Error('风险周期启用净值冲突；请在主设备核对。');
