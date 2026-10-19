@@ -98,7 +98,7 @@ export function calculateWorkbench(state,symbol,input=undefined,now=new Date().t
   const chosen=input.requestedQty===''||input.requestedQty==null?capacityQty:Number(input.requestedQty);
   if(!Number.isSafeInteger(chosen)||chosen<1||chosen>capacityQty)reasons.push('本次股数须为允许上限内的正整股数');
   if(!reasons.length)qty=chosen;
-  return {symbol,inputSnapshot:structuredClone(input),levels,signal,guard,account,portfolio,equity,cash,qualified,unknown,trends,cap,singleBudget,totalBudget,referenceQty,capacityQty,limits,limiting:limits.length?limits.filter(x=>Math.floor(x.qty+EPS)===Math.min(...limits.map(y=>Math.floor(y.qty+EPS)))).map(x=>x.name).join('、'):'资料待核对',qty,ready:reasons.length===0,reasons:[...new Set(reasons)]};
+  return {symbol,evaluatedAt:now,accountDayConfirmed:w.equityDay===usDay(now),inputSnapshot:structuredClone(input),levels,signal,guard,account,portfolio,equity,cash,qualified,unknown,trends,cap,singleBudget,totalBudget,referenceQty,capacityQty,limits,limiting:limits.length?limits.filter(x=>Math.floor(x.qty+EPS)===Math.min(...limits.map(y=>Math.floor(y.qty+EPS)))).map(x=>x.name).join('、'):'资料待核对',qty,ready:reasons.length===0,reasons:[...new Set(reasons)]};
 }
 export function prepareDisciplineBuy(state,input,now=new Date().toISOString()){
   const symbol=input.symbol,raw=structuredClone(input.snapshot??effectiveMarketInput(state,symbol,input.at));

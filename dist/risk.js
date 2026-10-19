@@ -1,5 +1,5 @@
 // v1.1: closing-equity risk cycles. No market data retrieval or order routing.
-import {accounting,usDay,uid} from './core.js';
+import {accounting,usDay,uid,hasReviewBreach} from './core.js';
 import {marketDay,marketClock,nextTradingDay} from './market.js';
 
 const EPS=1e-8,stamp=v=>typeof v==='string'&&Number.isFinite(Date.parse(v));
@@ -22,7 +22,7 @@ export function closingISO(day){
   return null;
 }
 export function executionReview(round){
-  if(round.fills.some(f=>f.violations.length)||round.review.compliant===false)return 'breach';
+  if(round.fills.some(f=>f.violations.length)||round.review.compliant===false||hasReviewBreach(round.review))return 'breach';
   if(round.fills.some(f=>(f.unverified??[]).length)||round.review.compliant!==true)return 'pending';
   return 'compliant';
 }
@@ -32,7 +32,9 @@ export function disciplineGuard(state,now=new Date().toISOString()){
     const a=accounting({...r,fills:r.fills.filter(f=>Date.parse(f.at)<=Date.parse(now))});
     if(a.closed&&Date.parse(a.exitAt)>=effective)events.push({at:a.exitAt,kind:a.realized<-EPS?'loss':a.realized>EPS?'win':'flat'});
     if(r.executionModel?.mode==='atr-2r')for(const f of r.fills)if(f.violations.length&&Date.parse(f.at)>=effective&&Date.parse(f.at)<=Date.parse(now))events.push({at:f.at,kind:'breach'});
-    if(r.review.compliant===false&&stamp(r.review.reviewedAt)&&Date.parse(r.review.reviewedAt)<=Date.parse(now)&&!r.fills.some(f=>f.violations.length))events.push({at:r.review.reviewedAt,kind:'breach'});
+    const reviewBreaches=[...(r.review.errorHistory??[]).map(x=>x.at)];
+    if(r.review.compliant===false||hasReviewBreach(r.review))reviewBreaches.push(r.review.breachAt??r.review.reviewedAt);
+    if(!r.fills.some(f=>f.violations.length))for(const at of new Set(reviewBreaches))if(stamp(at)&&Date.parse(at)>=effective&&Date.parse(at)<=Date.parse(now))events.push({at,kind:'breach'});
   }
   events.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)||({win:0,flat:1,loss:2,breach:3}[a.kind]-{win:0,flat:1,loss:2,breach:3}[b.kind]));
   let streak=0,trigger=null,resumeDay=null;const triggers=[];

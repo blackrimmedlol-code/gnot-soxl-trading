@@ -1,6 +1,8 @@
 // Pure financial functions; shared snapshot validation. No requests or order routing.
 import {validateTrendFeed} from './trend-feed.js';
 export const SCHEMA_VERSION = 1;
+export const REVIEW_ERRORS=Object.freeze({none:'无偏离',early:'抢跑',revenge:'追损','early-exit':'未按规则提前退出',risk:'扩大风险',missed:'漏执行',other:'其他偏离'});
+export function hasReviewBreach(review){return !!(review.errorTag&&review.errorTag!=='none')||(review.errorHistory??[]).some(x=>x.tag&&x.tag!=='none');}
 export const RULES = Object.freeze({riskPct: .01, initialEquity: 25000, initialAmount: 5000, minNetRR: 1.5, pauseDD: .05, haltDD: .10});
 export const EXECUTION_PROFILES=Object.freeze({
   SOXL:Object.freeze({stopPct:.0215,targetR:2,asOf:'2026-10-13'}),
@@ -226,8 +228,8 @@ export function statistics(state,symbol='all') {
   const avg=arr=>arr.length?arr.reduce((s,x)=>s+x,0)/arr.length:null;
   let streak=0, maxStreak=0;
   for(const x of closed) {streak=x.a.realized<-EPS?streak+1:0;maxStreak=Math.max(maxStreak,streak);}
-  const known=closed.filter(x=>typeof x.round.review.compliant==='boolean');
-  const compliant=known.filter(x=>x.round.review.compliant===true && !(x.round.fills??[]).some(f=>(f.violations??[]).length)).length;
+  const known=closed.filter(x=>typeof x.round.review.compliant==='boolean'||hasReviewBreach(x.round.review));
+  const compliant=known.filter(x=>x.round.review.compliant===true && !hasReviewBreach(x.round.review) && !(x.round.fills??[]).some(f=>(f.violations??[]).length)).length;
   const realized=active.reduce((s,r)=>s+accounting(r).realized,0);
   const open=active.filter(r=>accounting(r).qty>0);
   const marksMissing=open.some(r=>accounting(r).unrealized===null);
@@ -268,6 +270,11 @@ export function validateState(input) {
   assert(Array.isArray(input.snapshots)&&input.snapshots.length<=10000,'权益快照数据无效。');
   assert(Array.isArray(input.drawdownReviews)&&input.drawdownReviews.length<=1000,'回撤复核记录无效。');
   const ids=new Set(); const unique=id=>{assert(string(id,200)&&id.length>0&&!ids.has(id),'存在缺失或重复的数据 ID。');ids.add(id);};
+  const entryCheck=check=>{
+    assert(obj(check)&&check.version===1&&stamp(check.at)&&typeof check.ready==='boolean'&&Number.isSafeInteger(check.allowedQty)&&check.allowedQty>=0&&(check.ready?check.allowedQty>0:check.allowedQty===0),'入场核对快照无效。');
+    assert(['auto','manual'].includes(check.source)&&[check.hourAt,check.signalAt].every(x=>x===null||stamp(x)),'入场核对来源或K线时间无效。');
+    assert(Array.isArray(check.checks)&&check.checks.length<=10&&check.checks.every(x=>obj(x)&&string(x.id,30)&&['pass','wait','pending'].includes(x.status))&&Array.isArray(check.reasons)&&check.reasons.length<=100&&check.reasons.every(x=>string(x,2000)),'入场核对条件无效。');
+  };
   for(const r of input.rounds) {
     unique(r.id);assert(['active','history'].includes(r.scope),'交易分类无效。');
     assert(r.entrySource===undefined||['plan','actual'].includes(r.entrySource),'交易记录来源无效。');
@@ -286,6 +293,7 @@ export function validateState(input) {
         assert(Math.abs(stop-m.stop)<EPS&&Math.abs(Number(r.plan.stop)-m.stop)<EPS,'结构／ATR 止损与入场快照不一致。');
         assert(['SOXL','GDXU','BITX'].includes(r.symbol),'新纪律仅支持 SOXL、GDXU、BITX。');
         assert(Array.isArray(r.stopEvents)&&r.stopEvents.length===0,'新纪律不移动初始止损。');
+        if(m.inputSnapshot?.entryCheck!==undefined)entryCheck(m.inputSnapshot.entryCheck);
         if(m.ruleVersion!==undefined){
           assert(m.ruleVersion==='1.1'&&obj(m.riskSnapshot),'新纪律版本或风险档位快照缺失。');
           const z=m.riskSnapshot;
@@ -306,6 +314,9 @@ export function validateState(input) {
     assert(r.review.reviewedAt===undefined||stamp(r.review.reviewedAt),'复盘时间无效。');
     assert(r.review.stopReentry===undefined||['pending','yes','no'].includes(r.review.stopReentry),'止损后新买点观察无效。');
     assert(r.review.stopObservedAt===undefined||stamp(r.review.stopObservedAt),'止损观察时间无效。');
+    assert(r.review.errorTag===undefined||r.review.errorTag===''||Object.hasOwn(REVIEW_ERRORS,r.review.errorTag),'复盘错误标签无效。');
+    assert(r.review.errorHistory===undefined||(Array.isArray(r.review.errorHistory)&&r.review.errorHistory.length<=100&&r.review.errorHistory.every(x=>obj(x)&&stamp(x.at)&&x.tag!=='none'&&Object.hasOwn(REVIEW_ERRORS,x.tag))),'复盘偏离标签记录无效。');
+    assert(r.review.breachAt===undefined||stamp(r.review.breachAt),'偏离确认时间无效。');
     assert(Array.isArray(r.fills)&&r.fills.length<=10000&&Array.isArray(r.stopEvents),'成交／止损记录无效。');
     for(const f of r.fills) {
       unique(f.id);assert(stamp(f.at)&&['buy','sell'].includes(f.side)&&['entry','add','partial','exit'].includes(f.kind),'成交时间／类型无效。');
@@ -343,6 +354,7 @@ export function validateState(input) {
     assert(['r','price'].includes(d.plan.targetMode),'目标模式无效。');
     assert(d.sizingMode===undefined||['shares','amount'].includes(d.sizingMode),'仓位输入方式无效。');
     for(const value of [d.quantity,d.plan.quantity])assert(value===undefined||value===''||finite(n(value)),'股数草稿含非法数值。');
+    if(d.executionSnapshot?.entryCheck!==undefined)entryCheck(d.executionSnapshot.entryCheck);
   }
   validateDraft(input.draft);
   if(input.symbolDrafts!==undefined){

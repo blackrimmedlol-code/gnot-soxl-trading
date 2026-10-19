@@ -1,5 +1,7 @@
 import {accountRisk,latestCloseDay,executionReview,closingISO} from './risk.js';
 import {accounting,calculatePlan} from './core.js';
+import {errorTags} from './execution-insights.js';
+import {REVIEW_ERRORS} from './core.js';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>v==null||!Number.isFinite(v)?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(v);
 const pct=v=>v==null?'—':(v*100).toFixed(2)+'%';
@@ -25,7 +27,8 @@ export function journalTable(rounds){
   return `<div class="table-wrap"><table class="execution-table"><thead><tr><th>日期／标的</th><th>趋势／突破</th><th>买价／股数</th><th>初始止损</th><th>退出目标</th><th>实际退出</th><th>实际R</th><th>守纪／原因</th><th></th></tr></thead><tbody>${rounds.map(r=>{
     const a=accounting(r),status=executionReview(r),snapshot=r.executionModel?.inputSnapshot,trend=snapshot&&['close1h','ema20','ema50'].every(k=>Number(snapshot[k])>0)?Number(snapshot.close1h)>Number(snapshot.ema50)&&Number(snapshot.ema20)>Number(snapshot.ema50):null,breakout=snapshot&&snapshot.high&&snapshot.close30?Number(snapshot.close30)>Number(snapshot.high):null;
     const sold=a.rows.filter(x=>x.side==='sell'),qty=sold.reduce((n,x)=>n+x.qty,0),avgExit=qty?sold.reduce((n,x)=>n+x.price*x.qty,0)/qty:null,stop=Number(r.plan.stop),target=calculatePlan(r.plan).valid?calculatePlan(r.plan).target:null;
-    const verdict={compliant:'守纪',breach:'违纪',pending:'待核对'}[status],reason=r.fills.flatMap(f=>[...f.violations,...(f.unverified??[])]).join('；')||r.review.notes||'待完成复盘';
+    const tags=errorTags(r),tagText=tags.length?tags.map(t=>REVIEW_ERRORS[t]).join('／'):r.review.errorTag==='none'?'已标注无偏离':'尚未标注';
+    const verdict={compliant:'守纪',breach:'违纪',pending:'待核对'}[status],reason=tagText+' · '+(r.fills.flatMap(f=>[...f.violations,...(f.unverified??[])]).join('；')||r.review.notes||'待完成复盘');
     return `<tr><td><strong>${esc(r.symbol)}</strong><small>${esc((a.entryAt??r.createdAt).slice(0,10))} · ${esc(r.executionModel?.ruleVersion??'旧版')}</small></td><td>${trend===null?'待核对':trend?'通过':'不合格'}／${breakout===null?'待核对':breakout?'通过':'不合格'}</td><td>${money(Number(r.plan.entry))}<small>${r.fills.filter(f=>f.side==='buy').reduce((n,f)=>n+f.qty,0)} 股 · 剩余 ${a.qty}</small></td><td>${stop>0?money(stop):'未知'}</td><td>${money(target)}</td><td>${money(avgExit)}<small>${a.closed?'已全部退出':qty?'部分退出':'持仓中'}</small></td><td class="${a.r>0?'positive':a.r<0?'negative':''}">${a.r===null?'—':(a.r>=0?'+':'')+a.r.toFixed(2)+'R'}</td><td><span class="tag ${status==='breach'?'negative':''}">${verdict}</span><small title="${esc(reason)}">${esc(reason.slice(0,38))}${reason.length>38?'…':''}</small></td><td>${a.qty?`<button class="table-action" data-sell="${esc(r.id)}">卖出</button>`:''}<button class="table-action" data-open-record="${esc(r.id)}">详情／复盘</button></td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
